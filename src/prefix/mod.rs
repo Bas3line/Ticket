@@ -6,6 +6,7 @@ pub mod owner;
 pub mod settings;
 pub mod utility;
 pub mod roast;
+pub mod toast;
 
 use anyhow::Result;
 use serenity::all::{Context, Message};
@@ -33,6 +34,7 @@ pub async fn handle_prefix_command(
         "help" => help::execute(ctx, msg, db).await,
         "ping" => utility::ping(ctx, msg, db).await,
         "roast" => roast::execute(ctx, msg, db, owner_id).await,
+        "toast" => toast::execute(ctx, msg, db, args).await,
         "setup" | "panel" => setup::execute(ctx, msg, db, args).await,
         "settings" | "config" => settings::settings(ctx, msg, db, args).await,
         "prefix" => setup::set_prefix(ctx, msg, db, args).await,

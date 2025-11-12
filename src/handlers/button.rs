@@ -154,8 +154,26 @@ pub async fn handle_ticket_create(
 
     let components = vec![serenity::all::CreateActionRow::Buttons(buttons)];
 
+    let ping_role_mention = if let Ok(Some((ping_role_id,))) = sqlx::query_as::<_, (Option<i64>,)>(
+        "SELECT ping_role_id FROM guilds WHERE guild_id = $1"
+    )
+    .bind(guild_id)
+    .fetch_optional(&db.pool)
+    .await
+    {
+        ping_role_id.map(|id| format!("<@&{}>", id))
+    } else {
+        None
+    };
+
+    let welcome_content = if let Some(role) = ping_role_mention {
+        format!("{} New ticket opened!", role)
+    } else {
+        String::new()
+    };
+
     channel
-        .send_message(&ctx.http, serenity::all::CreateMessage::new().embed(embed).components(components))
+        .send_message(&ctx.http, serenity::all::CreateMessage::new().content(welcome_content).embed(embed).components(components))
         .await?;
 
     let response_embed = create_success_embed(
@@ -200,6 +218,48 @@ pub async fn handle_ticket_claim(
     let ticket = crate::database::ticket::get_ticket_by_channel(&db.pool, channel_id).await?;
 
     if let Some(ticket) = ticket {
+        // Check if user has support role
+        let support_roles = crate::database::ticket::get_support_roles(&db.pool, ticket.guild_id).await?;
+
+        if support_roles.is_empty() {
+            let embed = create_error_embed(
+                "No Support Roles",
+                "No support roles have been configured for this server",
+            );
+
+            interaction
+                .create_response(&ctx.http, CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .embed(embed)
+                        .ephemeral(true)
+                ))
+                .await?;
+            return Ok(());
+        }
+
+        let guild_id = interaction.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?;
+        let member = guild_id.member(&ctx.http, interaction.user.id).await?;
+
+        let has_support_role = support_roles.iter().any(|role| {
+            member.roles.contains(&serenity::all::RoleId::new(role.role_id as u64))
+        });
+
+        if !has_support_role {
+            let embed = create_error_embed(
+                "Permission Denied",
+                "Only users with a support role can claim tickets",
+            );
+
+            interaction
+                .create_response(&ctx.http, CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .embed(embed)
+                        .ephemeral(true)
+                ))
+                .await?;
+            return Ok(());
+        }
+
         if ticket.is_claimed() {
             let embed = create_error_embed(
                 "Already Claimed",
