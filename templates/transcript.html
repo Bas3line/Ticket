@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ticket #{{ ticket_number }} Transcript</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #36393f;
+            color: #dcddde;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: #2f3136;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .header {
+            background-color: #202225;
+            padding: 20px;
+            border-bottom: 1px solid #1e1f22;
+        }
+
+        .header h1 {
+            color: #ffffff;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+
+        .header-info {
+            color: #b9bbbe;
+            font-size: 14px;
+        }
+
+        .header-info span {
+            margin-right: 15px;
+        }
+
+        .messages {
+            padding: 20px;
+        }
+
+        .message {
+            display: flex;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+
+        .message:hover {
+            background-color: #32353b;
+        }
+
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 15px;
+            flex-shrink: 0;
+            background-color: #5865f2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        .avatar img {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+
+        .message-content {
+            flex: 1;
+        }
+
+        .message-header {
+            display: flex;
+            align-items: baseline;
+            margin-bottom: 5px;
+        }
+
+        .author-name {
+            color: #ffffff;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+
+        .timestamp {
+            color: #72767d;
+            font-size: 12px;
+        }
+
+        .message-text {
+            color: #dcddde;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+
+        .attachments {
+            margin-top: 10px;
+        }
+
+        .attachment {
+            display: inline-block;
+            background-color: #2f3136;
+            border: 1px solid #1e1f22;
+            border-radius: 4px;
+            padding: 10px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            text-decoration: none;
+            color: #00aff4;
+            font-size: 14px;
+        }
+
+        .attachment:hover {
+            background-color: #36393f;
+        }
+
+        .footer {
+            background-color: #202225;
+            padding: 20px;
+            text-align: center;
+            border-top: 1px solid #1e1f22;
+            color: #72767d;
+            font-size: 12px;
+        }
+
+        .no-messages {
+            text-align: center;
+            padding: 40px;
+            color: #72767d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Ticket #{{ ticket_number }}</h1>
+            <div class="header-info">
+                <span>Owner: {{ owner_name }}</span>
+                <span>Created: {{ created_at }}</span>
+                {% match closed_at %}
+                {% when Some with (date) %}
+                <span>Closed: {{ date }}</span>
+                {% when None %}
+                {% endmatch %}
+                {% match claimed_by %}
+                {% when Some with (claimer) %}
+                <span>Claimed by: {{ claimer }}</span>
+                {% when None %}
+                {% endmatch %}
+            </div>
+        </div>
+
+        <div class="messages">
+            {% if messages.is_empty() %}
+                <div class="no-messages">
+                    No messages in this ticket.
+                </div>
+            {% else %}
+                {% for message in messages %}
+                    <div class="message">
+                        <div class="avatar">
+                            {% match message.author_avatar_url %}
+                            {% when Some with (avatar) %}
+                                <img src="{{ avatar }}" alt="{{ message.author_name }}">
+                            {% when None %}
+                                {{ message.author_name.chars().next().unwrap_or('?') }}
+                            {% endmatch %}
+                        </div>
+                        <div class="message-content">
+                            <div class="message-header">
+                                <span class="author-name">{{ message.author_name }}</span>
+                                <span class="timestamp">{{ message.created_at.format("%Y-%m-%d %H:%M:%S UTC") }}</span>
+                            </div>
+                            <div class="message-text">{{ message.content }}</div>
+                            {% if !message.attachments.is_null() && message.attachments.as_array().is_some() %}
+                                <div class="attachments">
+                                    {% for attachment in message.attachments.as_array().unwrap() %}
+                                        {% if attachment["url"].is_string() %}
+                                            {% let url = attachment["url"].as_str().unwrap() %}
+                                            {% if url.ends_with(".png") || url.ends_with(".jpg") || url.ends_with(".jpeg") || url.ends_with(".gif") || url.ends_with(".webp") %}
+                                                <div style="margin-top: 10px;">
+                                                    <img src="{{ url }}" alt="{{ attachment["filename"].as_str().unwrap_or("image") }}" style="max-width: 400px; max-height: 300px; border-radius: 4px;">
+                                                </div>
+                                            {% else %}
+                                                <a href="{{ url }}"
+                                                   class="attachment"
+                                                   target="_blank">
+                                                    {{ attachment["filename"].as_str().unwrap_or("attachment") }}
+                                                </a>
+                                            {% endif %}
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+
+        <div class="footer">
+            Generated by Ticket Bot - {{ generated_at }}
+        </div>
+    </div>
+</body>
+</html>

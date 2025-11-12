@@ -1,0 +1,40 @@
+[package]
+name = "ticket-bot"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ticket Bot Contributors"]
+license = "MIT"
+description = "A feature-rich Discord ticket bot with PostgreSQL and Redis support"
+
+[dependencies]
+# Discord
+serenity = { version = "0.12", features = ["client", "gateway", "rustls_backend", "model", "cache"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono", "uuid"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
+# Serialization & Config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dotenvy = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+thiserror = "2"
+sysinfo = "0.33"
+
+# HTML Generation
+askama = "0.12"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
