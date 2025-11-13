@@ -587,18 +587,22 @@ fn create_ticket_commands_embed(prefix: &str) -> CreateEmbed {
             "**Prefix Commands:**\n\
             `{}close` - Close current ticket and generate transcript\n\
             `{}claim` - Claim ticket and stop escalations\n\
-            `{}escalate` - Alert support staff (hourly reminders)\n\
-            `{}handle` - Immediate one-time notification to support\n\
-            `{}transcript` - Generate and download transcript\n\n\
+            `{}escalate` - DM support + hourly reminders until claimed (unanswered only)\n\
+            `{}handle` - One-time urgent DM to all support staff\n\
+            `{}transcript` - Generate and download transcript\n\
+            `{}reminder <time> <reason>` - Set reminder (e.g. 30m, 2h, 1d)\n\n\
             **Slash Commands:**\n\
             `/close` - Close ticket channel\n\
             `/claim` - Claim ticket as yours\n\
-            `/escalate` - Start hourly escalation reminders\n\
-            `/handle` - Send immediate support notification\n\
+            `/escalate` - DM support + hourly reminders (unanswered tickets)\n\
+            `/handle` - One-time urgent notification to support staff\n\
             `/priority <level>` - Set priority (low/normal/high/urgent)\n\
             `/note <text>` - Add private note to ticket\n\n\
+            **Escalate vs Handle:**\n\
+            • `escalate` - For unanswered tickets, sends hourly DM reminders\n\
+            • `handle` - For any ticket, one-time urgent notification\n\n\
             **Note:** Use `{}doc <command>` for detailed command info",
-            prefix, prefix, prefix, prefix, prefix, prefix
+            prefix, prefix, prefix, prefix, prefix, prefix, prefix
         )
     )
     .color(0x5865F2)
@@ -622,8 +626,18 @@ fn create_setup_commands_embed(prefix: &str) -> CreateEmbed {
             **Panel Management:**\n\
             • Send new ticket panel\n\
             • Edit existing panels (title, description, buttons)\n\
-            • Delete panels",
-            prefix, prefix, prefix
+            • Delete panels\n\n\
+            **Settings Configuration:**\n\
+            `{}settings claimbuttons <true|false>` - Toggle claim buttons\n\
+            `{}settings autoclose <hours>` - Auto-close inactive tickets\n\
+            `{}settings ticketlimit <number>` - Max tickets per user\n\
+            `{}settings cooldown <seconds>` - Ticket creation cooldown\n\
+            `{}settings dmoncreate <true|false>` - DM on ticket creation\n\
+            `{}settings embedcolor <hex>` - Panel embed color\n\
+            `{}settings embedtitle <text>` - Panel embed title\n\
+            `{}settings embeddescription <text>` - Panel description\n\
+            `{}settings embedfooter <text>` - Panel embed footer",
+            prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix
         )
     )
     .color(0x5865F2)
