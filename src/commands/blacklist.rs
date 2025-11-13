@@ -33,7 +33,7 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
                             }
                         });
 
-                    let guild_id = interaction.guild_id.unwrap().get() as i64;
+                    let _guild_id = interaction.guild_id.unwrap().get() as i64;
                     let user_id = user.id.get() as i64;
                     let blacklisted_by = interaction.user.id.get() as i64;
 
@@ -70,7 +70,7 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
                     ..
                 }) = sub_options.iter().find(|o| o.name == "user")
                 {
-                    let guild_id = interaction.guild_id.unwrap().get() as i64;
+                    let _guild_id = interaction.guild_id.unwrap().get() as i64;
                     let user_id = user.id.get() as i64;
 
                     sqlx::query("DELETE FROM blacklist WHERE target_id = $1 AND target_type = 'user'")
@@ -93,7 +93,7 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
                 }
             }
             "list" => {
-                let guild_id = interaction.guild_id.unwrap().get() as i64;
+                let _guild_id = interaction.guild_id.unwrap().get() as i64;
 
                 let blacklisted: Vec<(i64, Option<String>)> = sqlx::query_as(
                     "SELECT target_id, reason FROM blacklist WHERE target_type = 'user' ORDER BY created_at DESC"

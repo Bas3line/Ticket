@@ -26,8 +26,10 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
             })
             .unwrap_or_else(|| "normal".to_string());
 
+        let final_priority = if priority == "reset" { "normal" } else { &priority };
+
         sqlx::query("UPDATE tickets SET priority = $1 WHERE id = $2")
-            .bind(&priority)
+            .bind(final_priority)
             .bind(ticket.id)
             .execute(&db.pool)
             .await?;
@@ -141,7 +143,9 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
                 .unwrap_or(());
         }
 
-        let color = match priority.as_str() {
+        let display_priority = if priority == "reset" { "normal" } else { &priority };
+
+        let color = match display_priority {
             "low" => serenity::all::Colour::from_rgb(149, 165, 166),
             "normal" => serenity::all::Colour::from_rgb(88, 101, 242),
             "high" => serenity::all::Colour::from_rgb(241, 196, 15),
@@ -149,18 +153,18 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
             _ => serenity::all::Colour::from_rgb(88, 101, 242),
         };
 
-        // Send log
         let guild = crate::database::ticket::get_or_create_guild(&db.pool, ticket.guild_id).await?;
+        let action_text = if priority == "reset" { "Priority Reset" } else { "Priority Set" };
         let log_embed = crate::utils::create_embed(
-            "Priority Set",
-            format!("Ticket #{}\nPriority: **{}**\nSet by: <@{}>",
-                ticket.ticket_number, priority.to_uppercase(), interaction.user.id)
+            action_text,
+            format!("Ticket: ticket-{}\nPriority: **{}**\nSet by: <@{}>",
+                ticket.owner_id, display_priority.to_uppercase(), interaction.user.id)
         );
         let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
 
         let embed = serenity::all::CreateEmbed::new()
             .title("Priority Updated")
-            .description(format!("Ticket priority set to: **{}**", priority.to_uppercase()))
+            .description(format!("Ticket priority set to: **{}**", display_priority.to_uppercase()))
             .color(color);
 
         interaction
@@ -197,6 +201,7 @@ pub fn register() -> CreateCommand {
             .add_string_choice("Low", "low")
             .add_string_choice("Normal", "normal")
             .add_string_choice("High", "high")
-            .add_string_choice("Urgent", "urgent"),
+            .add_string_choice("Urgent", "urgent")
+            .add_string_choice("Reset", "reset"),
         )
 }

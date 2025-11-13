@@ -74,8 +74,9 @@ fn create_main_help_embed(prefix: &str, bot_name: &str, server_count: usize, gui
             format!(
                 "`{}setup` - Interactive setup wizard\n\
                 `{}panel` - Create ticket panel\n\
+                `{}doc <command>` - Get detailed docs for any command\n\
                 `{}help` - Show this menu",
-                prefix, prefix, prefix
+                prefix, prefix, prefix, prefix
             ),
             false,
         )

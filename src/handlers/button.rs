@@ -118,7 +118,7 @@ pub async fn handle_ticket_create(
         .and_then(|g| g.icon_url());
 
     let mut embed = crate::utils::create_embed(
-        format!("Ticket #{}", ticket.ticket_number),
+        format!("Ticket - {}", user_id),
         format!(
             "Welcome <@{}>!\n\nA support team member will be with you shortly.\nTo close this ticket, use `/close`",
             user_id
@@ -172,8 +172,14 @@ pub async fn handle_ticket_create(
         String::new()
     };
 
-    channel
+    let welcome_msg = channel
         .send_message(&ctx.http, serenity::all::CreateMessage::new().content(welcome_content).embed(embed).components(components))
+        .await?;
+
+    sqlx::query("UPDATE tickets SET opening_message_id = $1 WHERE id = $2")
+        .bind(welcome_msg.id.get() as i64)
+        .bind(ticket.id)
+        .execute(&db.pool)
         .await?;
 
     let response_embed = create_success_embed(
@@ -194,8 +200,8 @@ pub async fn handle_ticket_create(
         let log_embed = crate::utils::create_embed(
             "Ticket Opened",
             format!(
-                "Ticket: #{}\nUser: <@{}>\nChannel: <#{}>",
-                ticket.ticket_number, user_id, channel.id
+                "Ticket: ticket-{}\nUser: <@{}>\nChannel: <#{}>",
+                user_id, user_id, channel.id
             ),
         );
 
@@ -278,11 +284,12 @@ pub async fn handle_ticket_claim(
 
         crate::database::ticket::claim_ticket(&db.pool, ticket.id, claimer_id).await?;
 
-        // Send log
+        let _ = crate::database::ticket::deactivate_escalation(&db.pool, ticket.id).await;
+
         let guild = crate::database::ticket::get_or_create_guild(&db.pool, ticket.guild_id).await?;
         let log_embed = crate::utils::create_embed(
             "Ticket Claimed",
-            format!("Ticket #{}\nClaimed by: <@{}>\nOwner: <@{}>", ticket.ticket_number, claimer_id, ticket.owner_id)
+            format!("Ticket: ticket-{}\nClaimed by: <@{}>\nOwner: <@{}>", ticket.owner_id, claimer_id, ticket.owner_id)
         );
         let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
 
@@ -374,7 +381,7 @@ pub async fn handle_ticket_unclaim(
         let guild = crate::database::ticket::get_or_create_guild(&db.pool, ticket.guild_id).await?;
         let log_embed = crate::utils::create_embed(
             "Ticket Unclaimed",
-            format!("Ticket #{}\nUnclaimed by: <@{}>\nOwner: <@{}>", ticket.ticket_number, user_id, ticket.owner_id)
+            format!("Ticket: ticket-{}\nUnclaimed by: <@{}>\nOwner: <@{}>", ticket.owner_id, user_id, ticket.owner_id)
         );
         let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
 
@@ -427,6 +434,15 @@ pub async fn handle_ticket_close(
     let ticket = crate::database::ticket::get_ticket_by_channel(&db.pool, channel_id).await?;
 
     if let Some(ticket) = ticket {
+        // Acknowledge the interaction IMMEDIATELY (within 3 seconds)
+        interaction
+            .create_response(&ctx.http, CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .content("Closing ticket and generating transcript... This channel will be deleted in 5 seconds.")
+                    .ephemeral(true)
+            ))
+            .await?;
+
         let closed_at = chrono::Utc::now();
 
         info!("Ticket {} closed in channel {} by user {}", ticket.ticket_number, channel_id, interaction.user.id.get());
@@ -460,13 +476,14 @@ pub async fn handle_ticket_close(
         .fetch_one(&db.pool)
         .await
         {
+            // Send to transcript channel if configured
             if let Some(transcript_channel_id) = guild.transcript_channel_id {
                 let channel = serenity::all::ChannelId::new(transcript_channel_id as u64);
 
                 let file = serenity::all::CreateAttachment::path(&filepath).await?;
 
                 let embed = crate::utils::create_embed(
-                    format!("Ticket #{} Closed", ticket.ticket_number),
+                    format!("Ticket - {} Closed", ticket.owner_id),
                     format!(
                         "Owner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
                         ticket.owner_id,
@@ -479,10 +496,27 @@ pub async fn handle_ticket_close(
                     .send_message(&ctx.http, serenity::all::CreateMessage::new().embed(embed).add_file(file))
                     .await?;
 
-                let _ = crate::utils::transcript::delete_transcript(&filepath).await;
-
                 info!("Transcript for ticket {} sent to channel {}", ticket.ticket_number, transcript_channel_id);
             }
+
+            // Send to ticket owner's DM
+            let owner_user = serenity::all::UserId::new(ticket.owner_id as u64).to_user(&ctx.http).await;
+            if let Ok(user) = owner_user {
+                if let Ok(dm) = user.create_dm_channel(&ctx.http).await {
+                    let dm_embed = crate::utils::create_embed(
+                        "Ticket Closed - Transcript",
+                        format!("Your ticket #{} has been closed. Here's the transcript.", ticket.ticket_number)
+                    ).color(0x5865F2);
+                    let dm_file = serenity::all::CreateAttachment::path(&filepath).await?;
+                    let _ = dm.send_message(&ctx.http,
+                        serenity::all::CreateMessage::new()
+                            .embed(dm_embed)
+                            .add_file(dm_file)
+                    ).await;
+                }
+            }
+
+            let _ = crate::utils::transcript::delete_transcript(&filepath).await;
         }
 
         crate::database::ticket::delete_ticket_messages(&db.pool, ticket.id).await?;
@@ -490,27 +524,22 @@ pub async fn handle_ticket_close(
         let mut redis_conn = db.redis.clone();
         let _ = crate::database::ticket::cleanup_priority_ping(&mut redis_conn, ticket.id).await;
 
+        let _ = crate::database::ticket::deactivate_escalation(&db.pool, ticket.id).await;
+
         // Send log
         if let Ok(guild) = crate::database::ticket::get_or_create_guild(&db.pool, ticket.guild_id).await {
             let log_embed = crate::utils::create_embed(
                 "Ticket Closed",
-                format!("Ticket #{}\nOwner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
-                    ticket.ticket_number, ticket.owner_id, interaction.user.id, closed_at.timestamp())
+                format!("Ticket: ticket-{}\nOwner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
+                    ticket.owner_id, ticket.owner_id, interaction.user.id, closed_at.timestamp())
             );
             let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
         }
 
         crate::database::ticket::close_ticket(&db.pool, ticket.id).await?;
 
-        interaction
-            .create_response(&ctx.http, CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .content("Ticket closed. This channel will be deleted in 5 seconds.")
-            ))
-            .await?;
-
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        interaction.channel_id.delete(&ctx.http).await?;
+        let _ = interaction.channel_id.delete(&ctx.http).await;
     }
 
     Ok(())
@@ -605,9 +634,10 @@ pub async fn handle_ticket_create_category(
     let category_uuid = Uuid::parse_str(category_id)?;
 
     let category: Option<(String, String)> = sqlx::query_as(
-        "SELECT name, description FROM ticket_categories WHERE id = $1"
+        "SELECT name, description FROM ticket_categories WHERE id = $1 AND guild_id = $2"
     )
     .bind(&category_uuid)
+    .bind(guild_id.get() as i64)
     .fetch_optional(&db.pool)
     .await?;
 
@@ -707,7 +737,7 @@ pub async fn handle_ticket_create_category(
     info!("Created ticket {} in channel {} for user {} (category: {})", ticket.ticket_number, ticket_channel.id.get(), user_id, category_name);
 
     let embed = crate::utils::create_embed(
-        format!("Ticket #{} - {}", ticket.ticket_number, category_name),
+        format!("Ticket - {}", category_name),
         format!("Welcome <@{}>! Please describe your issue and our support team will be with you shortly.", user_id)
     ).color(0x5865F2);
 
@@ -741,7 +771,7 @@ pub async fn handle_ticket_create_category(
         String::new()
     };
 
-    ticket_channel
+    let welcome_msg = ticket_channel
         .send_message(
             &ctx.http,
             serenity::all::CreateMessage::new()
@@ -751,13 +781,31 @@ pub async fn handle_ticket_create_category(
         )
         .await?;
 
+    sqlx::query("UPDATE tickets SET opening_message_id = $1 WHERE id = $2")
+        .bind(welcome_msg.id.get() as i64)
+        .bind(ticket.id)
+        .execute(&db.pool)
+        .await?;
+
+    if let Ok(Some((use_custom, msg))) = crate::database::ticket::get_category_welcome_message(&db.pool, category_uuid).await {
+        if use_custom {
+            if let Some(custom_msg) = msg {
+                ticket_channel.send_message(
+                    &ctx.http,
+                    serenity::all::CreateMessage::new()
+                        .content(custom_msg.replace("{user}", &format!("<@{}>", user_id)))
+                ).await?;
+            }
+        }
+    }
+
     if let Some(log_channel_id) = guild_data.log_channel_id {
         let log_channel = serenity::all::ChannelId::new(log_channel_id as u64);
         let log_embed = crate::utils::create_embed(
             "Ticket Created",
             format!(
-                "**Ticket:** #{}\n**User:** <@{}>\n**Category:** {}\n**Channel:** <#{}>\n**Created:** <t:{}:F>",
-                ticket.ticket_number,
+                "**Ticket:** ticket-{}\n**User:** <@{}>\n**Category:** {}\n**Channel:** <#{}>\n**Created:** <t:{}:F>",
+                user_id,
                 user_id,
                 category_name,
                 ticket_channel.id,

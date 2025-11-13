@@ -7,3 +7,7 @@ pub mod stats;
 pub mod priority;
 pub mod blacklist;
 pub mod note;
+pub mod escalate;
+pub mod handle;
+pub mod claim;
+pub mod doc;

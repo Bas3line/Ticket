@@ -45,11 +45,57 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
                     .execute(&db.pool)
                     .await?;
 
-                    // Send log
+                    if let Some(opening_msg_id) = sqlx::query_as::<_, (Option<i64>,)>(
+                        "SELECT opening_message_id FROM tickets WHERE id = $1"
+                    )
+                    .bind(ticket.id)
+                    .fetch_optional(&db.pool)
+                    .await?
+                    .and_then(|(id,)| id)
+                    {
+                        let notes: Vec<(String,)> = sqlx::query_as(
+                            "SELECT note FROM ticket_notes WHERE ticket_id = $1 ORDER BY created_at ASC"
+                        )
+                        .bind(ticket.id)
+                        .fetch_all(&db.pool)
+                        .await?;
+
+                        let notes_text = notes.iter()
+                            .map(|(n,)| format!("• {}", n))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+
+                        let updated_description = format!(
+                            "Welcome <@{}>!\n\nA support team member will be with you shortly.\nTo close this ticket, use `/close`\n\n**Notes:**\n{}",
+                            ticket.owner_id,
+                            notes_text
+                        );
+
+                        let guild_icon = ctx.cache.guild(serenity::all::GuildId::new(ticket.guild_id as u64))
+                            .and_then(|g| g.icon_url());
+
+                        let mut updated_embed = crate::utils::create_embed(
+                            format!("Ticket - {}", ticket.owner_id),
+                            updated_description,
+                        );
+
+                        if let Some(icon_url) = guild_icon {
+                            updated_embed = updated_embed.thumbnail(icon_url);
+                        }
+
+                        let _ = interaction.channel_id
+                            .edit_message(
+                                &ctx.http,
+                                serenity::all::MessageId::new(opening_msg_id as u64),
+                                serenity::all::EditMessage::new().embed(updated_embed),
+                            )
+                            .await;
+                    }
+
                     let guild = crate::database::ticket::get_or_create_guild(&db.pool, ticket.guild_id).await?;
                     let log_embed = crate::utils::create_embed(
                         "Note Added",
-                        format!("Ticket #{}\nNote added by: <@{}>\nNote: {}", ticket.ticket_number, author_id, note)
+                        format!("Ticket: ticket-{}\nNote added by: <@{}>\nNote: {}", ticket.owner_id, author_id, note)
                     );
                     let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
 

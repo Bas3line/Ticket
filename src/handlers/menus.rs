@@ -586,18 +586,19 @@ fn create_ticket_commands_embed(prefix: &str) -> CreateEmbed {
         format!(
             "**Prefix Commands:**\n\
             `{}close` - Close current ticket and generate transcript\n\
-            `{}claim` - Claim ticket as yours\n\
+            `{}claim` - Claim ticket and stop escalations\n\
+            `{}escalate` - Alert support staff (hourly reminders)\n\
+            `{}handle` - Immediate one-time notification to support\n\
             `{}transcript` - Generate and download transcript\n\n\
             **Slash Commands:**\n\
             `/close` - Close ticket channel\n\
+            `/claim` - Claim ticket as yours\n\
+            `/escalate` - Start hourly escalation reminders\n\
+            `/handle` - Send immediate support notification\n\
             `/priority <level>` - Set priority (low/normal/high/urgent)\n\
             `/note <text>` - Add private note to ticket\n\n\
-            **Auto-Ping Feature:**\n\
-            • High/Urgent: Pings immediately + every 60min\n\
-            • Low: Pings every 120min\n\
-            • Transcripts include pfp, timestamps, and inline images\n\
-            • Automatic message cleanup after close",
-            prefix, prefix, prefix
+            **Note:** Use `{}doc <command>` for detailed command info",
+            prefix, prefix, prefix, prefix, prefix, prefix
         )
     )
     .color(0x5865F2)
@@ -1334,11 +1335,13 @@ pub async fn handle_category_edit_select(
     }
 
     let category_id = parts[2];
+    let category_uuid = uuid::Uuid::parse_str(category_id)
+        .map_err(|_| anyhow::anyhow!("Invalid category ID"))?;
 
     let category: Option<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT name, description, emoji FROM ticket_categories WHERE id = $1"
     )
-    .bind(category_id)
+    .bind(category_uuid)
     .fetch_optional(&db.pool)
     .await?;
 
@@ -1398,18 +1401,20 @@ pub async fn handle_category_delete_confirm(
     }
 
     let category_id = parts[3];
+    let category_uuid = uuid::Uuid::parse_str(category_id)
+        .map_err(|_| anyhow::anyhow!("Invalid category ID"))?;
     let guild_id = interaction.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?;
 
     let category_name: Option<(String,)> = sqlx::query_as(
         "SELECT name FROM ticket_categories WHERE id = $1"
     )
-    .bind(category_id)
+    .bind(category_uuid)
     .fetch_optional(&db.pool)
     .await?;
 
     if let Some((name,)) = category_name {
         sqlx::query("DELETE FROM ticket_categories WHERE id = $1")
-            .bind(category_id)
+            .bind(category_uuid)
             .execute(&db.pool)
             .await?;
 
@@ -1631,14 +1636,12 @@ pub async fn handle_panel_style_choice(
             .await?;
 
         let embed = create_embed(
-            "Button Color Selection",
+            "Button Color Configuration",
             format!(
-                "Choose button colors for your categories:\n\n{}\n\n\
-                **Available Colors:**\n\
-                🔵 Primary (Blue) - Default Discord style\n\
-                ⚪ Secondary (Gray) - Neutral style\n\
-                🟢 Success (Green) - Positive action\n\
-                🔴 Danger (Red) - Important/urgent",
+                "Choose how to configure button colors for your {} categories:\n\n{}\n\n\
+                **Same Color** - All buttons will have the same color\n\
+                **Custom Colors** - Choose different colors for each category button",
+                categories.len(),
                 categories.iter()
                     .map(|(_, name, emoji)| {
                         let e = emoji.as_ref().map(|s| format!("{} ", s)).unwrap_or_default();
@@ -1650,18 +1653,18 @@ pub async fn handle_panel_style_choice(
         ).color(0x5865F2);
 
         let select_options = vec![
-            serenity::all::CreateSelectMenuOption::new("🔵 Primary (Blue)", "primary"),
-            serenity::all::CreateSelectMenuOption::new("⚪ Secondary (Gray)", "secondary"),
-            serenity::all::CreateSelectMenuOption::new("🟢 Success (Green)", "success"),
-            serenity::all::CreateSelectMenuOption::new("🔴 Danger (Red)", "danger"),
+            serenity::all::CreateSelectMenuOption::new("Use Same Color", "same")
+                .description("All category buttons will have the same color"),
+            serenity::all::CreateSelectMenuOption::new("Custom Colors", "custom")
+                .description("Choose different colors for each category"),
         ];
 
         let select_menu = serenity::all::CreateSelectMenu::new(
-            format!("panel_button_color_{}", color_cache_key),
+            format!("panel_color_mode_{}", color_cache_key),
             serenity::all::CreateSelectMenuKind::String {
                 options: select_options,
             }
-        ).placeholder("Select default button color");
+        ).placeholder("Select color configuration mode");
 
         interaction
             .create_response(
@@ -1862,6 +1865,162 @@ async fn send_panel_with_categories(
     Ok(())
 }
 
+async fn send_panel_with_custom_colors(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+    db: &Database,
+    guild_id: serenity::all::GuildId,
+    channel_id: serenity::all::ChannelId,
+    cache_key: &str,
+    category_ids: Vec<String>,
+    custom_colors: std::collections::HashMap<String, String>,
+) -> Result<()> {
+    use uuid::Uuid;
+    let category_uuids: Vec<Uuid> = category_ids.iter()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .collect();
+
+    let placeholders = category_uuids.iter().enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let query_str = format!(
+        "SELECT id::text, name, emoji FROM ticket_categories WHERE id IN ({}) ORDER BY created_at",
+        placeholders
+    );
+
+    let mut query = sqlx::query_as::<_, (String, String, Option<String>)>(&query_str);
+    for uuid in &category_uuids {
+        query = query.bind(uuid);
+    }
+
+    let categories = query.fetch_all(&db.pool).await?;
+
+    let guild = crate::database::ticket::get_or_create_guild(&db.pool, guild_id.get() as i64).await?;
+
+    let embed_title = guild.embed_title.unwrap_or_else(|| "Support Ticket".to_string());
+    let embed_description = guild.embed_description.unwrap_or_else(|| "Select a category to create a ticket".to_string());
+    let embed_color = guild.embed_color.unwrap_or(5865714);
+    let embed_footer = guild.embed_footer;
+
+    let mut panel_embed = create_embed(&embed_title, &embed_description)
+        .color(embed_color);
+
+    if let Some(footer) = &embed_footer {
+        panel_embed = panel_embed.footer(serenity::all::CreateEmbedFooter::new(footer));
+    }
+
+    let buttons: Vec<_> = categories.iter().enumerate().take(5).map(|(i, (id, name, emoji))| {
+        let color = custom_colors.get(&i.to_string()).unwrap_or(&"primary".to_string()).clone();
+
+        let style = match color.as_str() {
+            "primary" => serenity::all::ButtonStyle::Primary,
+            "secondary" => serenity::all::ButtonStyle::Secondary,
+            "success" => serenity::all::ButtonStyle::Success,
+            "danger" => serenity::all::ButtonStyle::Danger,
+            _ => serenity::all::ButtonStyle::Primary,
+        };
+
+        let label = if name.len() > 80 { &name[..77] } else { name };
+        let mut button = serenity::all::CreateButton::new(format!("ticket_create_cat_{}", id))
+            .label(label)
+            .style(style);
+
+        if let Some(e) = emoji {
+            if let Ok(emoji_parsed) = e.parse::<serenity::all::ReactionType>() {
+                button = button.emoji(emoji_parsed);
+            }
+        }
+        button
+    }).collect();
+
+    let button_rows: Vec<_> = buttons.chunks(5)
+        .map(|chunk| serenity::all::CreateActionRow::Buttons(chunk.to_vec()))
+        .collect();
+
+    let panel_msg = channel_id.send_message(
+        &ctx.http,
+        serenity::all::CreateMessage::new()
+            .embed(panel_embed)
+            .components(button_rows)
+    ).await?;
+
+    sqlx::query(
+        "INSERT INTO ticket_panel (guild_id, channel_id, message_id, title, description, selection_type) VALUES ($1, $2, $3, $4, $5, $6)"
+    )
+    .bind(guild_id.get() as i64)
+    .bind(channel_id.get() as i64)
+    .bind(panel_msg.id.get() as i64)
+    .bind(&embed_title)
+    .bind(&embed_description)
+    .bind("button")
+    .execute(&db.pool)
+    .await?;
+
+    let panel_id: (String,) = sqlx::query_as(
+        "SELECT id::text FROM ticket_panel WHERE message_id = $1"
+    )
+    .bind(panel_msg.id.get() as i64)
+    .fetch_one(&db.pool)
+    .await?;
+
+    for (i, (cat_id, name, emoji)) in categories.iter().enumerate() {
+        let cat_uuid = Uuid::parse_str(cat_id)?;
+        let color = custom_colors.get(&i.to_string()).unwrap_or(&"primary".to_string()).clone();
+
+        sqlx::query(
+            "INSERT INTO panel_categories (panel_id, category_id, button_label, button_emoji, button_color) VALUES ($1::uuid, $2, $3, $4, $5)"
+        )
+        .bind(&panel_id.0)
+        .bind(&cat_uuid)
+        .bind(name)
+        .bind(emoji)
+        .bind(&color)
+        .execute(&db.pool)
+        .await?;
+    }
+
+    info!("Panel sent to channel {} in guild {} with {} categories (custom colors)",
+          channel_id.get(), guild_id.get(), categories.len());
+
+    let mut redis_conn_cleanup = db.redis.clone();
+    let _: () = redis::cmd("DEL")
+        .arg(format!("panel_categories:{}", cache_key))
+        .query_async(&mut redis_conn_cleanup)
+        .await
+        .unwrap_or(());
+
+    let mut redis_conn = db.redis.clone();
+    let _: () = redis::cmd("SADD")
+        .arg(format!("panels:{}", guild_id.get()))
+        .arg(panel_msg.id.get())
+        .query_async(&mut redis_conn)
+        .await
+        .unwrap_or(());
+
+    let success_embed = create_success_embed(
+        "Panel Sent",
+        format!("Panel has been sent to <#{}> with {} {} and custom colors",
+                channel_id,
+                categories.len(),
+                if categories.len() == 1 { "category" } else { "categories" })
+    );
+
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::UpdateMessage(
+                serenity::all::CreateInteractionResponseMessage::new()
+                    .embed(success_embed)
+                    .components(vec![])
+            ),
+        )
+        .await?;
+
+    Ok(())
+}
+
 pub async fn handle_panel_button_color_select(
     ctx: &Context,
     interaction: &ComponentInteraction,
@@ -1898,6 +2057,351 @@ pub async fn handle_panel_button_color_select(
         .unwrap_or(());
 
     send_panel_with_categories(ctx, interaction, db, guild_id, channel_id, &cache_key, category_ids, true, button_style).await
+}
+
+pub async fn handle_panel_color_mode_select(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+    db: &Database,
+) -> Result<()> {
+    let parts: Vec<&str> = interaction.data.custom_id.split('_').collect();
+    let color_cache_key = parts.last().ok_or_else(|| anyhow::anyhow!("Invalid color cache key"))?;
+
+    let mode = match &interaction.data.kind {
+        serenity::all::ComponentInteractionDataKind::StringSelect { values } => {
+            values.first().ok_or_else(|| anyhow::anyhow!("No mode selected"))?.clone()
+        }
+        _ => return Ok(()),
+    };
+
+    let mut redis_conn = db.redis.clone();
+    let panel_data_str: String = redis::cmd("GET")
+        .arg(format!("panel_color_setup:{}", color_cache_key))
+        .query_async(&mut redis_conn)
+        .await?;
+
+    let panel_data: serde_json::Value = serde_json::from_str(&panel_data_str)?;
+    let category_ids: Vec<String> = serde_json::from_value(panel_data["categories"].clone())?;
+
+    use uuid::Uuid;
+    let category_uuids: Vec<Uuid> = category_ids.iter()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .collect();
+
+    let placeholders = category_uuids.iter().enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let query_str = format!(
+        "SELECT id::text, name, emoji FROM ticket_categories WHERE id IN ({}) ORDER BY created_at",
+        placeholders
+    );
+
+    let mut query = sqlx::query_as::<_, (String, String, Option<String>)>(&query_str);
+    for uuid in &category_uuids {
+        query = query.bind(uuid);
+    }
+
+    let categories = query.fetch_all(&db.pool).await?;
+
+    if mode == "same" {
+        let embed = create_embed(
+            "Select Button Color",
+            format!(
+                "Choose the color for all category buttons:\n\n{}\n\n\
+                **Available Colors:**\n\
+                🔵 Primary (Blue) - Default Discord style\n\
+                ⚪ Secondary (Gray) - Neutral style\n\
+                🟢 Success (Green) - Positive action\n\
+                🔴 Danger (Red) - Important/urgent",
+                categories.iter()
+                    .map(|(_, name, emoji)| {
+                        let e = emoji.as_ref().map(|s| format!("{} ", s)).unwrap_or_default();
+                        format!("• {}{}", e, name)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        ).color(0x5865F2);
+
+        let select_options = vec![
+            serenity::all::CreateSelectMenuOption::new("🔵 Primary (Blue)", "primary"),
+            serenity::all::CreateSelectMenuOption::new("⚪ Secondary (Gray)", "secondary"),
+            serenity::all::CreateSelectMenuOption::new("🟢 Success (Green)", "success"),
+            serenity::all::CreateSelectMenuOption::new("🔴 Danger (Red)", "danger"),
+        ];
+
+        let select_menu = serenity::all::CreateSelectMenu::new(
+            format!("panel_button_color_{}", color_cache_key),
+            serenity::all::CreateSelectMenuKind::String {
+                options: select_options,
+            }
+        ).placeholder("Select button color");
+
+        interaction
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::UpdateMessage(
+                    CreateInteractionResponseMessage::new()
+                        .embed(embed)
+                        .components(vec![serenity::all::CreateActionRow::SelectMenu(select_menu)])
+                ),
+            )
+            .await?;
+    } else {
+        let embed_description = format!(
+            "Select colors for each category button:\n\n{}\n\n\
+            Select a color for each category below, then click **Create Panel**",
+            categories.iter()
+                .map(|(_, name, emoji)| {
+                    let e = emoji.as_ref().map(|s| format!("{} ", s)).unwrap_or_default();
+                    format!("• {}{}", e, name)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
+        let embed = create_embed("Customize Button Colors", &embed_description)
+            .color(0x5865F2);
+
+        let mut components = vec![];
+
+        for (i, (_cat_id, name, emoji)) in categories.iter().enumerate().take(5) {
+            let display_name = if let Some(e) = emoji {
+                format!("{} {}", e, name)
+            } else {
+                name.clone()
+            };
+
+            let select_options = vec![
+                serenity::all::CreateSelectMenuOption::new("🔵 Primary (Blue)", "primary"),
+                serenity::all::CreateSelectMenuOption::new("⚪ Secondary (Gray)", "secondary"),
+                serenity::all::CreateSelectMenuOption::new("🟢 Success (Green)", "success"),
+                serenity::all::CreateSelectMenuOption::new("🔴 Danger (Red)", "danger"),
+            ];
+
+            let select_menu = serenity::all::CreateSelectMenu::new(
+                format!("panel_custom_color_{}_{}", i, color_cache_key),
+                serenity::all::CreateSelectMenuKind::String {
+                    options: select_options,
+                }
+            ).placeholder(&display_name);
+
+            components.push(serenity::all::CreateActionRow::SelectMenu(select_menu));
+        }
+
+        let finish_button = serenity::all::CreateButton::new(format!("panel_finish_custom_{}", color_cache_key))
+            .label("Create Panel")
+            .style(serenity::all::ButtonStyle::Success);
+
+        components.push(serenity::all::CreateActionRow::Buttons(vec![finish_button]));
+
+        interaction
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::UpdateMessage(
+                    CreateInteractionResponseMessage::new()
+                        .embed(embed)
+                        .components(components)
+                ),
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
+pub async fn handle_panel_custom_color_select(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+    db: &Database,
+) -> Result<()> {
+    let parts: Vec<&str> = interaction.data.custom_id.split('_').collect();
+    if parts.len() < 5 {
+        return Ok(());
+    }
+
+    let category_index = parts[3].parse::<usize>().unwrap_or(0);
+    let color_cache_key = parts[4];
+
+    let selected_color = match &interaction.data.kind {
+        serenity::all::ComponentInteractionDataKind::StringSelect { values } => {
+            values.first().ok_or_else(|| anyhow::anyhow!("No color selected"))?.clone()
+        }
+        _ => return Ok(()),
+    };
+
+    // Store the selected color in Redis
+    let mut redis_conn = db.redis.clone();
+    let redis_key = format!("panel_custom_colors:{}", color_cache_key);
+
+    let _: () = redis::cmd("HSET")
+        .arg(&redis_key)
+        .arg(category_index.to_string())
+        .arg(&selected_color)
+        .query_async(&mut redis_conn)
+        .await?;
+
+    let _: () = redis::cmd("EXPIRE")
+        .arg(&redis_key)
+        .arg(3600)
+        .query_async(&mut redis_conn)
+        .await?;
+
+    // Retrieve panel data to reconstruct the message with updated selections
+    let panel_data_str: String = redis::cmd("GET")
+        .arg(format!("panel_color_setup:{}", color_cache_key))
+        .query_async(&mut redis_conn)
+        .await?;
+
+    let panel_data: serde_json::Value = serde_json::from_str(&panel_data_str)?;
+    let category_ids: Vec<String> = serde_json::from_value(panel_data["categories"].clone())?;
+
+    use uuid::Uuid;
+    let category_uuids: Vec<Uuid> = category_ids.iter()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .collect();
+
+    let placeholders = category_uuids.iter().enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let query_str = format!(
+        "SELECT id::text, name, emoji FROM ticket_categories WHERE id IN ({}) ORDER BY created_at",
+        placeholders
+    );
+
+    let mut query = sqlx::query_as::<_, (String, String, Option<String>)>(&query_str);
+    for uuid in &category_uuids {
+        query = query.bind(uuid);
+    }
+
+    let categories = query.fetch_all(&db.pool).await?;
+
+    // Retrieve all selected colors so far
+    let custom_colors_map: std::collections::HashMap<String, String> = redis::cmd("HGETALL")
+        .arg(&redis_key)
+        .query_async(&mut redis_conn)
+        .await
+        .unwrap_or_default();
+
+    // Build embed description showing which colors have been selected
+    let color_emoji_map = std::collections::HashMap::from([
+        ("primary", "🔵"),
+        ("secondary", "⚪"),
+        ("success", "🟢"),
+        ("danger", "🔴"),
+    ]);
+
+    let mut embed_description = String::from("Select colors for each category button:\n\n");
+
+    for (i, (_cat_id, name, emoji)) in categories.iter().enumerate() {
+        let e = emoji.as_ref().map(|s| format!("{} ", s)).unwrap_or_default();
+        let color_status = if let Some(color) = custom_colors_map.get(&i.to_string()) {
+            let color_emoji = color_emoji_map.get(color.as_str()).unwrap_or(&"");
+            format!(" {} **{}**", color_emoji, color.to_uppercase())
+        } else {
+            String::from(" - Not selected")
+        };
+        embed_description.push_str(&format!("• {}{}{}\n", e, name, color_status));
+    }
+
+    embed_description.push_str("\nSelect a color for each category above, then click **Create Panel**");
+
+    let embed = create_embed("Customize Button Colors", &embed_description)
+        .color(0x5865F2);
+
+    // Rebuild the components with the same dropdowns
+    let mut components = vec![];
+
+    for (i, (_cat_id, name, emoji)) in categories.iter().enumerate().take(5) {
+        let display_name = if let Some(e) = emoji {
+            format!("{} {}", e, name)
+        } else {
+            name.clone()
+        };
+
+        let select_options = vec![
+            serenity::all::CreateSelectMenuOption::new("🔵 Primary (Blue)", "primary"),
+            serenity::all::CreateSelectMenuOption::new("⚪ Secondary (Gray)", "secondary"),
+            serenity::all::CreateSelectMenuOption::new("🟢 Success (Green)", "success"),
+            serenity::all::CreateSelectMenuOption::new("🔴 Danger (Red)", "danger"),
+        ];
+
+        let select_menu = serenity::all::CreateSelectMenu::new(
+            format!("panel_custom_color_{}_{}", i, color_cache_key),
+            serenity::all::CreateSelectMenuKind::String {
+                options: select_options,
+            }
+        ).placeholder(&display_name);
+
+        components.push(serenity::all::CreateActionRow::SelectMenu(select_menu));
+    }
+
+    let finish_button = serenity::all::CreateButton::new(format!("panel_finish_custom_{}", color_cache_key))
+        .label("Create Panel")
+        .style(serenity::all::ButtonStyle::Success);
+
+    components.push(serenity::all::CreateActionRow::Buttons(vec![finish_button]));
+
+    // Update the message to show the selections
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .embed(embed)
+                    .components(components)
+            ),
+        )
+        .await?;
+
+    Ok(())
+}
+
+pub async fn handle_panel_finish_custom(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+    db: &Database,
+) -> Result<()> {
+    let parts: Vec<&str> = interaction.data.custom_id.split('_').collect();
+    let color_cache_key = parts.last().ok_or_else(|| anyhow::anyhow!("Invalid color cache key"))?;
+
+    let mut redis_conn = db.redis.clone();
+    let panel_data_str: String = redis::cmd("GET")
+        .arg(format!("panel_color_setup:{}", color_cache_key))
+        .query_async(&mut redis_conn)
+        .await?;
+
+    let panel_data: serde_json::Value = serde_json::from_str(&panel_data_str)?;
+    let category_ids: Vec<String> = serde_json::from_value(panel_data["categories"].clone())?;
+    let cache_key = panel_data["cache_key"].as_str().ok_or_else(|| anyhow::anyhow!("Missing cache key"))?.to_string();
+
+    let custom_colors_map: std::collections::HashMap<String, String> = redis::cmd("HGETALL")
+        .arg(format!("panel_custom_colors:{}", color_cache_key))
+        .query_async(&mut redis_conn)
+        .await
+        .unwrap_or_default();
+
+    let guild_id = interaction.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?;
+    let channel_id = interaction.channel_id;
+
+    let mut redis_conn_cleanup = db.redis.clone();
+    let _: () = redis::cmd("DEL")
+        .arg(format!("panel_color_setup:{}", color_cache_key))
+        .query_async(&mut redis_conn_cleanup)
+        .await
+        .unwrap_or(());
+
+    let _: () = redis::cmd("DEL")
+        .arg(format!("panel_custom_colors:{}", color_cache_key))
+        .query_async(&mut redis_conn_cleanup)
+        .await
+        .unwrap_or(());
+
+    send_panel_with_custom_colors(ctx, interaction, db, guild_id, channel_id, &cache_key, category_ids, custom_colors_map).await
 }
 
 pub async fn handle_ticket_category_select(

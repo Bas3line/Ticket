@@ -1,4 +1,4 @@
-use crate::models::{Guild, SupportRole, Ticket, TicketCategory, TicketMessage, TicketPanel};
+use crate::models::{Guild, SupportRole, Ticket, TicketCategory, TicketMessage, TicketPanel, Reminder};
 use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -90,7 +90,7 @@ pub async fn create_ticket_category(
 
 pub async fn get_ticket_categories(pool: &PgPool, guild_id: i64) -> Result<Vec<TicketCategory>> {
     let categories = sqlx::query_as::<_, TicketCategory>(
-        "SELECT * FROM ticket_categories WHERE guild_id = $1 ORDER BY created_at ASC"
+        "SELECT id, guild_id, name, description, emoji, use_custom_welcome, custom_welcome_message, created_at FROM ticket_categories WHERE guild_id = $1 ORDER BY created_at ASC"
     )
     .bind(guild_id)
     .fetch_all(pool)
@@ -100,9 +100,10 @@ pub async fn get_ticket_categories(pool: &PgPool, guild_id: i64) -> Result<Vec<T
 }
 
 #[allow(dead_code)]
-pub async fn delete_ticket_category(pool: &PgPool, category_id: Uuid) -> Result<()> {
-    sqlx::query("DELETE FROM ticket_categories WHERE id = $1")
+pub async fn delete_ticket_category(pool: &PgPool, guild_id: i64, category_id: Uuid) -> Result<()> {
+    sqlx::query("DELETE FROM ticket_categories WHERE id = $1 AND guild_id = $2")
         .bind(category_id)
+        .bind(guild_id)
         .execute(pool)
         .await?;
 
@@ -135,7 +136,7 @@ pub async fn remove_support_role(pool: &PgPool, guild_id: i64, role_id: i64) -> 
 
 pub async fn get_support_roles(pool: &PgPool, guild_id: i64) -> Result<Vec<SupportRole>> {
     let roles = sqlx::query_as::<_, SupportRole>(
-        "SELECT * FROM support_roles WHERE guild_id = $1"
+        "SELECT id, guild_id, role_id, created_at FROM support_roles WHERE guild_id = $1"
     )
     .bind(guild_id)
     .fetch_all(pool)
@@ -181,7 +182,7 @@ async fn get_next_ticket_number(pool: &PgPool, guild_id: i64) -> Result<i32> {
 
 pub async fn get_ticket_by_channel(pool: &PgPool, channel_id: i64) -> Result<Option<Ticket>> {
     let ticket = sqlx::query_as::<_, Ticket>(
-        "SELECT * FROM tickets WHERE channel_id = $1"
+        "SELECT * FROM tickets WHERE channel_id = $1 LIMIT 1"
     )
     .bind(channel_id)
     .fetch_optional(pool)
@@ -204,7 +205,7 @@ pub async fn get_ticket_by_id(pool: &PgPool, ticket_id: Uuid) -> Result<Option<T
 
 pub async fn get_user_tickets(pool: &PgPool, guild_id: i64, user_id: i64) -> Result<Vec<Ticket>> {
     let tickets = sqlx::query_as::<_, Ticket>(
-        "SELECT * FROM tickets WHERE guild_id = $1 AND owner_id = $2 AND status = 'open'"
+        "SELECT * FROM tickets WHERE guild_id = $1 AND owner_id = $2 AND status = 'open' ORDER BY created_at DESC"
     )
     .bind(guild_id)
     .bind(user_id)
@@ -319,11 +320,12 @@ pub async fn create_ticket_panel(
 }
 
 #[allow(dead_code)]
-pub async fn get_ticket_panel(pool: &PgPool, message_id: i64) -> Result<Option<TicketPanel>> {
+pub async fn get_ticket_panel(pool: &PgPool, guild_id: i64, message_id: i64) -> Result<Option<TicketPanel>> {
     let panel = sqlx::query_as::<_, TicketPanel>(
-        "SELECT * FROM ticket_panel WHERE message_id = $1"
+        "SELECT * FROM ticket_panel WHERE message_id = $1 AND guild_id = $2"
     )
     .bind(message_id)
+    .bind(guild_id)
     .fetch_optional(pool)
     .await?;
 
@@ -582,4 +584,172 @@ pub async fn delete_ticket_messages(pool: &PgPool, ticket_id: Uuid) -> Result<()
         .await?;
 
     Ok(())
+}
+
+pub async fn set_category_welcome_message(
+    pool: &PgPool,
+    category_id: Uuid,
+    message: Option<String>,
+    use_custom: bool,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE ticket_categories
+         SET custom_welcome_message = $1, use_custom_welcome = $2
+         WHERE id = $3"
+    )
+    .bind(message)
+    .bind(use_custom)
+    .bind(category_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn get_category_welcome_message(
+    pool: &PgPool,
+    category_id: Uuid,
+) -> Result<Option<(bool, Option<String>)>> {
+    let result: Option<(bool, Option<String>)> = sqlx::query_as(
+        "SELECT use_custom_welcome, custom_welcome_message
+         FROM ticket_categories WHERE id = $1"
+    )
+    .bind(category_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn create_escalation(
+    pool: &PgPool,
+    ticket_id: Uuid,
+    escalated_by: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO ticket_escalations (ticket_id, escalated_by)
+         VALUES ($1, $2)
+         ON CONFLICT (ticket_id) DO UPDATE
+         SET is_active = TRUE, last_ping_at = NOW()"
+    )
+    .bind(ticket_id)
+    .bind(escalated_by)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn deactivate_escalation(pool: &PgPool, ticket_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE ticket_escalations SET is_active = FALSE WHERE ticket_id = $1")
+        .bind(ticket_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn get_active_escalations(pool: &PgPool) -> Result<Vec<(Uuid, i64)>> {
+    let escalations: Vec<(Uuid, i64)> = sqlx::query_as(
+        "SELECT ticket_id, EXTRACT(EPOCH FROM (NOW() - last_ping_at))::BIGINT
+         FROM ticket_escalations
+         WHERE is_active = TRUE"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(escalations)
+}
+
+pub async fn update_escalation_ping_time(pool: &PgPool, ticket_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE ticket_escalations SET last_ping_at = NOW() WHERE ticket_id = $1")
+        .bind(ticket_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn mark_ticket_has_messages(pool: &PgPool, ticket_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE tickets SET has_messages = TRUE WHERE id = $1")
+        .bind(ticket_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn ticket_has_messages(pool: &PgPool, ticket_id: Uuid) -> Result<bool> {
+    let result: Option<(bool,)> = sqlx::query_as(
+        "SELECT COALESCE(has_messages, FALSE) FROM tickets WHERE id = $1"
+    )
+    .bind(ticket_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result.map(|(has,)| has).unwrap_or(false))
+}
+
+pub async fn create_reminder(
+    pool: &PgPool,
+    user_id: i64,
+    channel_id: i64,
+    guild_id: Option<i64>,
+    message_id: Option<i64>,
+    reason: String,
+    remind_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Reminder> {
+    let reminder = sqlx::query_as::<_, Reminder>(
+        "INSERT INTO reminders (user_id, channel_id, guild_id, message_id, reason, remind_at)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *"
+    )
+    .bind(user_id)
+    .bind(channel_id)
+    .bind(guild_id)
+    .bind(message_id)
+    .bind(reason)
+    .bind(remind_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(reminder)
+}
+
+pub async fn get_pending_reminders(pool: &PgPool) -> Result<Vec<Reminder>> {
+    let reminders = sqlx::query_as::<_, Reminder>(
+        "SELECT * FROM reminders WHERE completed = FALSE AND remind_at <= NOW() ORDER BY remind_at ASC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(reminders)
+}
+
+pub async fn mark_reminder_completed(pool: &PgPool, reminder_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE reminders SET completed = TRUE WHERE id = $1")
+        .bind(reminder_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn delete_reminder(pool: &PgPool, reminder_id: Uuid) -> Result<()> {
+    sqlx::query("DELETE FROM reminders WHERE id = $1")
+        .bind(reminder_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn get_user_reminders(pool: &PgPool, user_id: i64) -> Result<Vec<Reminder>> {
+    let reminders = sqlx::query_as::<_, Reminder>(
+        "SELECT * FROM reminders WHERE user_id = $1 AND completed = FALSE ORDER BY remind_at ASC"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(reminders)
 }

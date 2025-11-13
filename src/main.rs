@@ -34,6 +34,10 @@ impl EventHandler for Handler {
             commands::priority::register(),
             commands::blacklist::register(),
             commands::note::register(),
+            commands::escalate::register(),
+            commands::handle::register(),
+            commands::claim::register(),
+            commands::doc::register(),
         ];
 
         for command in commands {
@@ -65,6 +69,10 @@ impl EventHandler for Handler {
                     "priority" => commands::priority::run(&ctx, &command, &self.db).await,
                     "blacklist" => commands::blacklist::run(&ctx, &command, &self.db).await,
                     "note" => commands::note::run(&ctx, &command, &self.db).await,
+                    "escalate" => commands::escalate::run(&ctx, &command, &self.db).await,
+                    "handle" => commands::handle::run(&ctx, &command, &self.db).await,
+                    "claim" => commands::claim::run(&ctx, &command, &self.db).await,
+                    "doc" => commands::doc::run(&ctx, &command).await,
                     _ => Ok(()),
                 };
 
@@ -112,7 +120,15 @@ impl EventHandler for Handler {
                     id if id.starts_with("panel_style_button_") => handlers::menus::handle_panel_style_choice(&ctx, &component, &self.db, true).await,
                     id if id.starts_with("panel_style_dropdown_") => handlers::menus::handle_panel_style_choice(&ctx, &component, &self.db, false).await,
                     id if id.starts_with("panel_button_color_") => handlers::menus::handle_panel_button_color_select(&ctx, &component, &self.db).await,
+                    id if id.starts_with("panel_color_mode_") => handlers::menus::handle_panel_color_mode_select(&ctx, &component, &self.db).await,
+                    id if id.starts_with("panel_custom_color_") => handlers::menus::handle_panel_custom_color_select(&ctx, &component, &self.db).await,
+                    id if id.starts_with("panel_finish_custom_") => handlers::menus::handle_panel_finish_custom(&ctx, &component, &self.db).await,
                     id if id.starts_with("ticket_create_cat_") => handlers::button::handle_ticket_create_category(&ctx, &component, &self.db).await,
+                    id if id.starts_with("panel_color_type:") => commands::panel::handle_color_type_selection(&ctx, &component, &self.db).await,
+                    id if id.starts_with("panel_same_color:") => commands::panel::handle_same_color_selection(&ctx, &component, &self.db).await,
+                    id if id.starts_with("panel_custom_color:") => commands::panel::handle_custom_color_selection(&ctx, &component, &self.db).await,
+                    id if id.starts_with("panel_finish_custom:") => commands::panel::handle_finish_custom(&ctx, &component, &self.db).await,
+                    id if id.starts_with("ticket_create:") => handlers::button::handle_ticket_create_category(&ctx, &component, &self.db).await,
                     _ => Ok(()),
                 };
 
@@ -236,6 +252,10 @@ impl EventHandler for Handler {
             {
                 error!("Failed to log ticket message: {}", e);
             }
+
+            if msg.author.id.get() as i64 != ticket.owner_id {
+                let _ = database::ticket::mark_ticket_has_messages(&self.db.pool, ticket.id).await;
+            }
         }
     }
 }
@@ -259,7 +279,34 @@ async fn main() -> Result<()> {
 
     let intents = GatewayIntents::GUILDS
         | GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
+        | GatewayIntents::MESSAGE_CONTENT
+        | GatewayIntents::GUILD_MEMBERS;
+
+    let db_clone = Arc::clone(&db);
+    let http_clone = Arc::new(serenity::all::Http::new(&config.discord_token));
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            if let Err(e) = process_escalations(&db_clone, &http_clone).await {
+                error!("Error processing escalations: {}", e);
+            }
+        }
+    });
+
+    let db_clone2 = Arc::clone(&db);
+    let http_clone2 = Arc::new(serenity::all::Http::new(&config.discord_token));
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Err(e) = process_reminders(&db_clone2, &http_clone2).await {
+                error!("Error processing reminders: {}", e);
+            }
+        }
+    });
 
     let mut client = Client::builder(&config.discord_token, intents)
         .event_handler(Handler {
@@ -270,6 +317,135 @@ async fn main() -> Result<()> {
 
     info!("Starting bot...");
     client.start().await?;
+
+    Ok(())
+}
+
+async fn process_escalations(db: &database::Database, http: &serenity::all::Http) -> Result<()> {
+    let escalations = database::ticket::get_active_escalations(&db.pool).await?;
+
+    for (ticket_id, seconds_since_last_ping) in escalations {
+        if seconds_since_last_ping >= 3600 {
+            if let Ok(Some(ticket)) = database::ticket::get_ticket_by_id(&db.pool, ticket_id).await {
+                if ticket.is_claimed() {
+                    let _ = database::ticket::deactivate_escalation(&db.pool, ticket_id).await;
+                    continue;
+                }
+
+                let support_roles = database::ticket::get_support_roles(&db.pool, ticket.guild_id).await?;
+
+                for role in &support_roles {
+                    if let Ok(guild_id) = serenity::all::GuildId::new(ticket.guild_id as u64).to_partial_guild(http).await {
+                        if let Ok(members) = guild_id.id.members(http, None, None).await {
+                            let role_id = serenity::all::RoleId::new(role.role_id as u64);
+
+                            for member in members {
+                                if member.roles.contains(&role_id) && !member.user.bot {
+                                    if let Ok(dm) = member.user.create_dm_channel(http).await {
+                                        let _ = dm.send_message(
+                                            http,
+                                            serenity::all::CreateMessage::new()
+                                                .embed(utils::create_embed(
+                                                    "Escalated Ticket Reminder",
+                                                    format!(
+                                                        "**Reminder:** This ticket still needs attention!\n\n\
+                                                         **Ticket:** #{}\n\
+                                                         **User:** <@{}>\n\
+                                                         **Channel:** <#{}>\n\n\
+                                                         Please claim this ticket to stop these reminders.",
+                                                        ticket.ticket_number,
+                                                        ticket.owner_id,
+                                                        ticket.channel_id
+                                                    )
+                                                ).color(0xED4245))
+                                        ).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let _ = database::ticket::update_escalation_ping_time(&db.pool, ticket_id).await;
+            } else {
+                let _ = database::ticket::deactivate_escalation(&db.pool, ticket_id).await;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_reminders(db: &database::Database, http: &serenity::all::Http) -> Result<()> {
+    let reminders = database::ticket::get_pending_reminders(&db.pool).await?;
+
+    for reminder in reminders {
+        let user_id = serenity::all::UserId::new(reminder.user_id as u64);
+        let channel_id = serenity::all::ChannelId::new(reminder.channel_id as u64);
+
+        if let Ok(user) = user_id.to_user(http).await {
+            if let Ok(dm) = user.create_dm_channel(http).await {
+                let created_timestamp = reminder.created_at.timestamp();
+                let message_link = if let (Some(guild_id), Some(message_id)) = (reminder.guild_id, reminder.message_id) {
+                    format!("\n\n[Jump to Message](https://discord.com/channels/{}/{}/{})", guild_id, reminder.channel_id, message_id)
+                } else {
+                    String::new()
+                };
+
+                let embed = utils::create_embed(
+                    "Reminder",
+                    format!(
+                        "<@{}> {}\n\n\
+                        **Set:** <t:{}:F> (<t:{}:R>){}",
+                        user.id.get(),
+                        reminder.reason,
+                        created_timestamp,
+                        created_timestamp,
+                        message_link
+                    )
+                ).color(0x5865F2);
+
+                let _ = dm.send_message(
+                    http,
+                    serenity::all::CreateMessage::new().embed(embed)
+                ).await;
+            }
+        }
+
+        if let Ok(channel) = channel_id.to_channel(http).await {
+            if let Some(guild_channel) = channel.guild() {
+                let created_timestamp = reminder.created_at.timestamp();
+                let message_link = if let Some(message_id) = reminder.message_id {
+                    format!("\n\n[Jump to Original Message](https://discord.com/channels/{}/{}/{})",
+                        reminder.guild_id.unwrap_or(0),
+                        reminder.channel_id,
+                        message_id)
+                } else {
+                    String::new()
+                };
+
+                let embed = utils::create_embed(
+                    "Reminder",
+                    format!(
+                        "<@{}> {}\n\n\
+                        **Set:** <t:{}:F> (<t:{}:R>){}",
+                        reminder.user_id,
+                        reminder.reason,
+                        created_timestamp,
+                        created_timestamp,
+                        message_link
+                    )
+                ).color(0x5865F2);
+
+                let _ = guild_channel.send_message(
+                    http,
+                    serenity::all::CreateMessage::new().embed(embed)
+                ).await;
+            }
+        }
+
+        let _ = database::ticket::mark_reminder_completed(&db.pool, reminder.id).await;
+    }
 
     Ok(())
 }

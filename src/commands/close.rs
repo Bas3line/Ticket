@@ -54,13 +54,14 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
         .fetch_one(&db.pool)
         .await
         {
+            // Send to transcript channel if configured
             if let Some(transcript_channel_id) = guild.transcript_channel_id {
                 let channel = serenity::all::ChannelId::new(transcript_channel_id as u64);
 
                 let file = serenity::all::CreateAttachment::path(&filepath).await?;
 
                 let embed = crate::utils::create_embed(
-                    format!("Ticket #{} Closed", ticket.ticket_number),
+                    format!("Ticket - {} Closed", ticket.owner_id),
                     format!(
                         "Owner: <@{}>\nClosed at: <t:{}:F>",
                         ticket.owner_id,
@@ -71,9 +72,26 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
                 channel
                     .send_message(&ctx.http, serenity::all::CreateMessage::new().embed(embed).add_file(file))
                     .await?;
-
-                let _ = crate::utils::transcript::delete_transcript(&filepath).await;
             }
+
+            // Send to ticket owner's DM
+            let owner_user = serenity::all::UserId::new(ticket.owner_id as u64).to_user(&ctx.http).await;
+            if let Ok(user) = owner_user {
+                if let Ok(dm) = user.create_dm_channel(&ctx.http).await {
+                    let dm_embed = crate::utils::create_embed(
+                        "Ticket Closed - Transcript",
+                        format!("Your ticket #{} has been closed. Here's the transcript.", ticket.ticket_number)
+                    ).color(0x5865F2);
+                    let dm_file = serenity::all::CreateAttachment::path(&filepath).await?;
+                    let _ = dm.send_message(&ctx.http,
+                        serenity::all::CreateMessage::new()
+                            .embed(dm_embed)
+                            .add_file(dm_file)
+                    ).await;
+                }
+            }
+
+            let _ = crate::utils::transcript::delete_transcript(&filepath).await;
         }
 
         crate::database::ticket::delete_ticket_messages(&db.pool, ticket.id).await?;
@@ -85,8 +103,8 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
         if let Ok(guild) = crate::database::ticket::get_or_create_guild(&db.pool, ticket.guild_id).await {
             let log_embed = crate::utils::create_embed(
                 "Ticket Closed",
-                format!("Ticket #{}\nOwner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
-                    ticket.ticket_number, ticket.owner_id, interaction.user.id, chrono::Utc::now().timestamp())
+                format!("Ticket: ticket-{}\nOwner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
+                    ticket.owner_id, ticket.owner_id, interaction.user.id, chrono::Utc::now().timestamp())
             );
             let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
         }

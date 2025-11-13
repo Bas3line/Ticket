@@ -30,6 +30,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 anyhow = "1"
 thiserror = "2"
 sysinfo = "0.33"
+base64 = "0.22"
 
 # HTML Generation
 askama = "0.12"

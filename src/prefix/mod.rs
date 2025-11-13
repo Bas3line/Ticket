@@ -7,6 +7,8 @@ pub mod settings;
 pub mod utility;
 pub mod roast;
 pub mod toast;
+pub mod doc;
+pub mod reminder;
 
 use anyhow::Result;
 use serenity::all::{Context, Message};
@@ -32,6 +34,8 @@ pub async fn handle_prefix_command(
 
     match command.as_str() {
         "help" => help::execute(ctx, msg, db).await,
+        "doc" => doc::execute(ctx, msg, db, args).await,
+        "reminder" | "remind" | "remindme" => reminder::reminder(ctx, msg, db, args).await,
         "ping" => utility::ping(ctx, msg, db).await,
         "roast" => roast::execute(ctx, msg, db, owner_id).await,
         "toast" => toast::execute(ctx, msg, db, args).await,
@@ -47,6 +51,8 @@ pub async fn handle_prefix_command(
         "close" => ticket::close(ctx, msg, db).await,
         "claim" => ticket::claim(ctx, msg, db).await,
         "transcript" | "trans" => ticket::transcript(ctx, msg, db).await,
+        "escalate" => ticket::escalate(ctx, msg, db).await,
+        "handle" => ticket::handle(ctx, msg, db).await,
         "profile" => owner::profile(ctx, msg, db).await,
         "botstats" => owner::stats(ctx, msg, db, owner_id).await,
         "addprem" => owner::add_premium(ctx, msg, db, args, owner_id).await,

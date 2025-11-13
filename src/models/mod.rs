@@ -59,6 +59,10 @@ pub struct TicketCategory {
     pub description: Option<String>,
     pub emoji: Option<String>,
     #[allow(dead_code)]
+    pub use_custom_welcome: Option<bool>,
+    #[allow(dead_code)]
+    pub custom_welcome_message: Option<String>,
+    #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
 }
 
@@ -87,6 +91,16 @@ pub struct Ticket {
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
+    #[allow(dead_code)]
+    pub priority: Option<String>,
+    #[allow(dead_code)]
+    pub rating: Option<i32>,
+    #[allow(dead_code)]
+    pub last_activity: Option<DateTime<Utc>>,
+    #[allow(dead_code)]
+    pub opening_message_id: Option<i64>,
+    #[allow(dead_code)]
+    pub has_messages: Option<bool>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -155,4 +169,17 @@ pub struct Blacklist {
     pub blacklisted_by: i64,
     #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Reminder {
+    pub id: Uuid,
+    pub user_id: i64,
+    pub channel_id: i64,
+    pub guild_id: Option<i64>,
+    pub message_id: Option<i64>,
+    pub reason: String,
+    pub remind_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub completed: bool,
 }

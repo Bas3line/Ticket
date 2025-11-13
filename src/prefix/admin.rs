@@ -424,7 +424,7 @@ pub async fn blacklist(ctx: &Context, msg: &Message, db: &Arc<Database>, args: &
         return Ok(());
     }
 
-    let guild_id = msg.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?.get() as i64;
+    let _guild_id = msg.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?.get() as i64;
 
     match args[0] {
         "add" => {

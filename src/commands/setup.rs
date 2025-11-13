@@ -99,6 +99,33 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
                         .await?;
                 }
             }
+            "button_color" => {
+                if let Some(ResolvedOption {
+                    value: ResolvedValue::String(color),
+                    ..
+                }) = sub_options.iter().find(|o| o.name == "color")
+                {
+                    let guild_id = interaction.guild_id.unwrap().get() as i64;
+                    sqlx::query("UPDATE guilds SET default_button_color = $1 WHERE guild_id = $2")
+                        .bind(color)
+                        .bind(guild_id)
+                        .execute(&db.pool)
+                        .await?;
+
+                    let embed = create_success_embed(
+                        "Button Color Set",
+                        format!("Default button color set to: **{}**", color),
+                    );
+
+                    interaction
+                        .create_response(&ctx.http, serenity::all::CreateInteractionResponse::Message(
+                            serenity::all::CreateInteractionResponseMessage::new()
+                                .embed(embed)
+                                .ephemeral(true)
+                        ))
+                        .await?;
+                }
+            }
             _ => {}
         }
     }
@@ -152,6 +179,25 @@ pub fn register() -> CreateCommand {
                     "The transcript channel",
                 )
                 .required(true),
+            ),
+        )
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "button_color",
+                "Set default button color for ticket panels",
+            )
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "color",
+                    "Button color style",
+                )
+                .required(true)
+                .add_string_choice("Primary (Blurple)", "primary")
+                .add_string_choice("Secondary (Gray)", "secondary")
+                .add_string_choice("Success (Green)", "success")
+                .add_string_choice("Danger (Red)", "danger"),
             ),
         )
 }
