@@ -11,3 +11,5 @@ pub mod escalate;
 pub mod handle;
 pub mod claim;
 pub mod doc;
+pub mod tag;
+pub mod assign;

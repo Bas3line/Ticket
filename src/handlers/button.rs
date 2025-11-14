@@ -434,7 +434,6 @@ pub async fn handle_ticket_close(
     let ticket = crate::database::ticket::get_ticket_by_channel(&db.pool, channel_id).await?;
 
     if let Some(ticket) = ticket {
-        // Acknowledge the interaction IMMEDIATELY (within 3 seconds)
         interaction
             .create_response(&ctx.http, CreateInteractionResponse::Message(
                 CreateInteractionResponseMessage::new()
@@ -443,103 +442,7 @@ pub async fn handle_ticket_close(
             ))
             .await?;
 
-        let closed_at = chrono::Utc::now();
-
-        info!("Ticket {} closed in channel {} by user {}", ticket.ticket_number, channel_id, interaction.user.id.get());
-
-        let messages = crate::database::ticket::get_ticket_messages(&db.pool, ticket.id).await?;
-
-        let owner = ctx.http.get_user(serenity::all::UserId::new(ticket.owner_id as u64)).await?;
-        let claimed_by_name = if let Some(claimer_id) = ticket.claimed_by {
-            let claimer = ctx.http.get_user(serenity::all::UserId::new(claimer_id as u64)).await?;
-            Some(claimer.name)
-        } else {
-            None
-        };
-
-        let html = crate::utils::transcript::generate_transcript(
-            ticket.ticket_number,
-            owner.name,
-            ticket.created_at,
-            Some(closed_at),
-            claimed_by_name,
-            messages,
-        )
-        .await?;
-
-        let filepath = crate::utils::transcript::save_transcript(ticket.guild_id, ticket.ticket_number, html).await?;
-
-        if let Ok(guild) = sqlx::query_as::<_, crate::models::Guild>(
-            "SELECT * FROM guilds WHERE guild_id = $1"
-        )
-        .bind(ticket.guild_id)
-        .fetch_one(&db.pool)
-        .await
-        {
-            // Send to transcript channel if configured
-            if let Some(transcript_channel_id) = guild.transcript_channel_id {
-                let channel = serenity::all::ChannelId::new(transcript_channel_id as u64);
-
-                let file = serenity::all::CreateAttachment::path(&filepath).await?;
-
-                let embed = crate::utils::create_embed(
-                    format!("Ticket - {} Closed", ticket.owner_id),
-                    format!(
-                        "Owner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
-                        ticket.owner_id,
-                        interaction.user.id,
-                        closed_at.timestamp()
-                    ),
-                );
-
-                channel
-                    .send_message(&ctx.http, serenity::all::CreateMessage::new().embed(embed).add_file(file))
-                    .await?;
-
-                info!("Transcript for ticket {} sent to channel {}", ticket.ticket_number, transcript_channel_id);
-            }
-
-            // Send to ticket owner's DM
-            let owner_user = serenity::all::UserId::new(ticket.owner_id as u64).to_user(&ctx.http).await;
-            if let Ok(user) = owner_user {
-                if let Ok(dm) = user.create_dm_channel(&ctx.http).await {
-                    let dm_embed = crate::utils::create_embed(
-                        "Ticket Closed - Transcript",
-                        format!("Your ticket #{} has been closed. Here's the transcript.", ticket.ticket_number)
-                    ).color(0x5865F2);
-                    let dm_file = serenity::all::CreateAttachment::path(&filepath).await?;
-                    let _ = dm.send_message(&ctx.http,
-                        serenity::all::CreateMessage::new()
-                            .embed(dm_embed)
-                            .add_file(dm_file)
-                    ).await;
-                }
-            }
-
-            let _ = crate::utils::transcript::delete_transcript(&filepath).await;
-        }
-
-        crate::database::ticket::delete_ticket_messages(&db.pool, ticket.id).await?;
-
-        let mut redis_conn = db.redis.clone();
-        let _ = crate::database::ticket::cleanup_priority_ping(&mut redis_conn, ticket.id).await;
-
-        let _ = crate::database::ticket::deactivate_escalation(&db.pool, ticket.id).await;
-
-        // Send log
-        if let Ok(guild) = crate::database::ticket::get_or_create_guild(&db.pool, ticket.guild_id).await {
-            let log_embed = crate::utils::create_embed(
-                "Ticket Closed",
-                format!("Ticket: ticket-{}\nOwner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
-                    ticket.owner_id, ticket.owner_id, interaction.user.id, closed_at.timestamp())
-            );
-            let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
-        }
-
-        crate::database::ticket::close_ticket(&db.pool, ticket.id).await?;
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        let _ = interaction.channel_id.delete(&ctx.http).await;
+        crate::utils::close_ticket_unified(ctx, ticket, interaction.user.id.get(), db).await?;
     }
 
     Ok(())
@@ -825,6 +728,91 @@ pub async fn handle_ticket_create_category(
             CreateInteractionResponse::Message(
                 CreateInteractionResponseMessage::new()
                     .content(format!("Ticket created: <#{}>", ticket_channel.id))
+                    .ephemeral(true),
+            ),
+        )
+        .await?;
+
+    Ok(())
+}
+
+pub async fn handle_autoclose_button(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+    db: &Database,
+) -> Result<()> {
+    let guild_id = interaction.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?.get() as i64;
+
+    let custom_id = &interaction.data.custom_id;
+
+    let (enabled, minutes, label) = match custom_id.as_str() {
+        "autoclose_10m" => (true, Some(10), "10 minutes"),
+        "autoclose_30m" => (true, Some(30), "30 minutes"),
+        "autoclose_1h" => (true, Some(60), "1 hour"),
+        "autoclose_2h" => (true, Some(120), "2 hours"),
+        "autoclose_disable" => (false, None, "Disabled"),
+        _ => return Ok(()),
+    };
+
+    crate::database::ticket::update_autoclose_settings(&db.pool, guild_id, enabled, minutes).await?;
+
+    let embed = create_success_embed(
+        "Auto-Close Updated",
+        format!("Auto-close has been set to: **{}**", label)
+    );
+
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .embed(embed)
+                    .ephemeral(true),
+            ),
+        )
+        .await?;
+
+    Ok(())
+}
+
+pub async fn handle_ticket_limit_button(
+    ctx: &Context,
+    interaction: &ComponentInteraction,
+    db: &Database,
+) -> Result<()> {
+    let guild_id = interaction.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?.get() as i64;
+
+    let custom_id = &interaction.data.custom_id;
+
+    let (limit, label) = match custom_id.as_str() {
+        "ticket_limit_1" => (1, "1 ticket"),
+        "ticket_limit_3" => (3, "3 tickets"),
+        "ticket_limit_5" => (5, "5 tickets"),
+        "ticket_limit_unlimited" => (0, "Unlimited"),
+        _ => return Ok(()),
+    };
+
+    crate::database::ticket::update_guild_settings(
+        &db.pool,
+        guild_id,
+        None,
+        None,
+        Some(limit),
+        None,
+        None
+    ).await?;
+
+    let embed = create_success_embed(
+        "Ticket Limit Updated",
+        format!("Ticket limit has been set to: **{}**", label)
+    );
+
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .embed(embed)
                     .ephemeral(true),
             ),
         )

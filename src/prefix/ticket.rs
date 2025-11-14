@@ -28,82 +28,12 @@ pub async fn close(ctx: &Context, msg: &Message, db: &Arc<Database>) -> Result<(
         return Ok(());
     }
 
-    let messages = db_ticket::get_ticket_messages(&db.pool, ticket.id).await?;
-
-    let owner_name = format!("<@{}>", ticket.owner_id);
-    let claimed_by = ticket.claimed_by.map(|id| format!("<@{}>", id));
-
-    let html_content = generate_transcript(
-        ticket.ticket_number,
-        owner_name,
-        ticket.created_at,
-        ticket.closed_at,
-        claimed_by,
-        messages,
-    ).await?;
-    let file_path = save_transcript(ticket.guild_id, ticket.ticket_number, html_content).await?;
-
-    db_ticket::delete_ticket_messages(&db.pool, ticket.id).await?;
-
-    let mut redis_conn = db.redis.clone();
-    let _ = db_ticket::cleanup_priority_ping(&mut redis_conn, ticket.id).await;
-
-    let _ = db_ticket::deactivate_escalation(&db.pool, ticket.id).await;
-
-    let guild = db_ticket::get_or_create_guild(&db.pool, ticket.guild_id).await?;
-
-    // Send to transcript channel if configured
-    if let Some(transcript_channel_id) = guild.transcript_channel_id {
-        let transcript_channel = serenity::all::ChannelId::new(transcript_channel_id as u64);
-
-        let embed = crate::utils::create_embed(
-            format!("Ticket - {} Transcript", ticket.owner_id),
-            format!("Ticket Owner: <@{}>\nClosed by: <@{}>", ticket.owner_id, msg.author.id.get()),
-        );
-
-        transcript_channel.send_message(&ctx.http,
-            serenity::all::CreateMessage::new()
-                .embed(embed)
-                .add_file(serenity::all::CreateAttachment::path(&file_path).await?)
-        ).await?;
-    }
-
-    // Send to ticket owner's DM
-    let owner_user = serenity::all::UserId::new(ticket.owner_id as u64).to_user(&ctx.http).await;
-    if let Ok(user) = owner_user {
-        if let Ok(dm) = user.create_dm_channel(&ctx.http).await {
-            let dm_embed = create_embed(
-                "Ticket Closed - Transcript",
-                format!("Your ticket #{} has been closed. Here's the transcript.", ticket.ticket_number)
-            ).color(0x5865F2);
-            let dm_file = serenity::all::CreateAttachment::path(&file_path).await?;
-            let _ = dm.send_message(&ctx.http,
-                serenity::all::CreateMessage::new()
-                    .embed(dm_embed)
-                    .add_file(dm_file)
-            ).await;
-        }
-    }
-
-    let _ = crate::utils::transcript::delete_transcript(&file_path).await;
-
-    // Send log
-    let log_embed = crate::utils::create_embed(
-        "Ticket Closed",
-        format!("Ticket: ticket-{}\nOwner: <@{}>\nClosed by: <@{}>\nClosed at: <t:{}:F>",
-            ticket.owner_id, ticket.owner_id, msg.author.id.get(), chrono::Utc::now().timestamp())
-    );
-    let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
-
-    db_ticket::close_ticket(&db.pool, ticket.id).await?;
-
     let embed = create_success_embed("Ticket Closed", "This ticket will be deleted in 5 seconds");
     msg.channel_id.send_message(&ctx.http,
         serenity::all::CreateMessage::new().embed(embed)
     ).await?;
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    msg.channel_id.delete(&ctx.http).await?;
+    crate::utils::close_ticket_unified(ctx, ticket, msg.author.id.get(), db).await?;
 
     Ok(())
 }
@@ -469,6 +399,148 @@ pub async fn handle(ctx: &Context, msg: &Message, db: &Arc<Database>) -> Result<
                 ).color(0xFEE75C))
         )
         .await?;
+
+    Ok(())
+}
+
+pub async fn assign(ctx: &Context, msg: &Message, db: &Arc<Database>, args: &[&str]) -> Result<()> {
+    let channel_id = msg.channel_id.get() as i64;
+    let assigner_id = msg.author.id.get() as i64;
+
+    let ticket = match db_ticket::get_ticket_by_channel(&db.pool, channel_id).await? {
+        Some(t) => t,
+        None => {
+            let embed = create_error_embed("Not a Ticket", "This command can only be used in ticket channels");
+            msg.channel_id.send_message(&ctx.http,
+                serenity::all::CreateMessage::new().embed(embed)
+            ).await?;
+            return Ok(());
+        }
+    };
+
+    let support_roles = db_ticket::get_support_roles(&db.pool, ticket.guild_id).await?;
+
+    if support_roles.is_empty() {
+        let embed = create_error_embed(
+            "No Support Roles",
+            "No support roles have been configured for this server",
+        );
+        msg.channel_id.send_message(&ctx.http,
+            serenity::all::CreateMessage::new().embed(embed)
+        ).await?;
+        return Ok(());
+    }
+
+    if !is_support_staff(ctx, msg, ticket.guild_id, db).await? {
+        let embed = create_error_embed(
+            "Permission Denied",
+            "Only users with a support role can assign tickets",
+        );
+        msg.channel_id.send_message(&ctx.http,
+            serenity::all::CreateMessage::new().embed(embed)
+        ).await?;
+        return Ok(());
+    }
+
+    if args.is_empty() {
+        let embed = create_error_embed(
+            "Missing User",
+            "Please mention a user to assign. Usage: `.assign @user`",
+        );
+        msg.channel_id.send_message(&ctx.http,
+            serenity::all::CreateMessage::new().embed(embed)
+        ).await?;
+        return Ok(());
+    }
+
+    let mentioned_user_id = if !msg.mentions.is_empty() {
+        msg.mentions[0].id.get() as i64
+    } else {
+        let user_str = args[0].trim_start_matches("<@").trim_end_matches(">").trim_start_matches("!");
+        match user_str.parse::<u64>() {
+            Ok(id) => id as i64,
+            Err(_) => {
+                let embed = create_error_embed("Invalid User", "Please mention a valid user");
+                msg.channel_id.send_message(&ctx.http,
+                    serenity::all::CreateMessage::new().embed(embed)
+                ).await?;
+                return Ok(());
+            }
+        }
+    };
+
+    let guild_id = msg.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?;
+    let assigned_member = match guild_id.member(&ctx.http, serenity::all::UserId::new(mentioned_user_id as u64)).await {
+        Ok(m) => m,
+        Err(_) => {
+            let embed = create_error_embed("Invalid User", "Could not find the mentioned user in this server");
+            msg.channel_id.send_message(&ctx.http,
+                serenity::all::CreateMessage::new().embed(embed)
+            ).await?;
+            return Ok(());
+        }
+    };
+
+    let assigned_has_support_role = support_roles.iter().any(|role| {
+        assigned_member.roles.contains(&serenity::all::RoleId::new(role.role_id as u64))
+    });
+
+    if !assigned_has_support_role {
+        let embed = create_error_embed(
+            "Invalid Assignment",
+            "Can only assign tickets to users with a support role",
+        );
+        msg.channel_id.send_message(&ctx.http,
+            serenity::all::CreateMessage::new().embed(embed)
+        ).await?;
+        return Ok(());
+    }
+
+    db_ticket::assign_ticket(&db.pool, ticket.id, mentioned_user_id).await?;
+
+    if let Ok(user) = serenity::all::UserId::new(mentioned_user_id as u64).to_user(&ctx.http).await {
+        if let Ok(dm_channel) = user.create_dm_channel(&ctx.http).await {
+            let dm_embed = crate::utils::create_embed(
+                "Ticket Assigned",
+                format!(
+                    "You have been assigned to a ticket!\n\n\
+                    **Ticket:** #{}\n\
+                    **Channel:** <#{}>\n\
+                    **Assigned by:** <@{}>\n\
+                    **Ticket Owner:** <@{}>\n\n\
+                    Please check the ticket channel to assist the user.",
+                    ticket.ticket_number,
+                    ticket.channel_id,
+                    assigner_id,
+                    ticket.owner_id
+                )
+            ).color(0x5865F2);
+
+            let _ = dm_channel.send_message(
+                &ctx.http,
+                serenity::all::CreateMessage::new().embed(dm_embed)
+            ).await;
+        }
+    }
+
+    let guild = db_ticket::get_or_create_guild(&db.pool, ticket.guild_id).await?;
+    let log_embed = crate::utils::create_embed(
+        "Ticket Assigned",
+        format!(
+            "Ticket: ticket-{}\nAssigned to: <@{}>\nAssigned by: <@{}>\nOwner: <@{}>",
+            ticket.owner_id, mentioned_user_id, assigner_id, ticket.owner_id
+        )
+    );
+    let _ = crate::utils::send_log(ctx, guild.log_channel_id, log_embed).await;
+
+    let embed = create_success_embed(
+        "Ticket Assigned",
+        format!("<@{}> has been assigned to this ticket by <@{}>", mentioned_user_id, assigner_id),
+    );
+
+    msg.channel_id.send_message(&ctx.http,
+        serenity::all::CreateMessage::new().embed(embed)
+    ).await?;
 
     Ok(())
 }

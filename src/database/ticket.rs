@@ -235,6 +235,25 @@ pub async fn unclaim_ticket(pool: &PgPool, ticket_id: Uuid) -> Result<()> {
     Ok(())
 }
 
+pub async fn assign_ticket(pool: &PgPool, ticket_id: Uuid, assignee_id: i64) -> Result<()> {
+    sqlx::query("UPDATE tickets SET assigned_to = $1 WHERE id = $2")
+        .bind(assignee_id)
+        .bind(ticket_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn update_ticket_last_message(pool: &PgPool, ticket_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE tickets SET last_message_at = NOW() WHERE id = $1")
+        .bind(ticket_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
 pub async fn close_ticket(pool: &PgPool, ticket_id: Uuid) -> Result<()> {
     sqlx::query("DELETE FROM tickets WHERE id = $1")
         .bind(ticket_id)
@@ -514,6 +533,39 @@ pub async fn update_embed_settings(
     q.execute(pool).await?;
 
     Ok(())
+}
+
+pub async fn update_autoclose_settings(
+    pool: &PgPool,
+    guild_id: i64,
+    enabled: bool,
+    minutes: Option<i32>,
+) -> Result<()> {
+    sqlx::query("UPDATE guilds SET autoclose_enabled = $1, autoclose_minutes = $2 WHERE guild_id = $3")
+        .bind(enabled)
+        .bind(minutes)
+        .bind(guild_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn get_inactive_tickets(pool: &PgPool) -> Result<Vec<(Uuid, i64, i64, i32)>> {
+    let tickets = sqlx::query_as::<_, (Uuid, i64, i64, i32)>(
+        "SELECT t.id, t.channel_id, t.guild_id, t.ticket_number
+         FROM tickets t
+         INNER JOIN guilds g ON t.guild_id = g.guild_id
+         WHERE g.autoclose_enabled = TRUE
+         AND g.autoclose_minutes IS NOT NULL
+         AND t.last_message_at IS NOT NULL
+         AND t.status = 'open'
+         AND t.last_message_at < NOW() - (g.autoclose_minutes || ' minutes')::INTERVAL"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(tickets)
 }
 
 pub async fn add_blacklist(

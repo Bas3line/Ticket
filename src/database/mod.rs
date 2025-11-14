@@ -3,6 +3,7 @@ use redis::aio::ConnectionManager;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 pub mod ticket;
+pub mod tag;
 
 #[derive(Clone)]
 pub struct Database {

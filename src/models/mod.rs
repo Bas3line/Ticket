@@ -29,6 +29,8 @@ pub struct Guild {
     pub embed_description: Option<String>,
     #[allow(dead_code)]
     pub embed_footer: Option<String>,
+    pub autoclose_enabled: Option<bool>,
+    pub autoclose_minutes: Option<i32>,
     #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
     #[allow(dead_code)]
@@ -87,6 +89,7 @@ pub struct Ticket {
     #[allow(dead_code)]
     pub category_id: Option<Uuid>,
     pub claimed_by: Option<i64>,
+    pub assigned_to: Option<i64>,
     #[allow(dead_code)]
     pub status: String,
     pub created_at: DateTime<Utc>,
@@ -101,6 +104,7 @@ pub struct Ticket {
     pub opening_message_id: Option<i64>,
     #[allow(dead_code)]
     pub has_messages: Option<bool>,
+    pub last_message_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -182,4 +186,16 @@ pub struct Reminder {
     pub remind_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub completed: bool,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Tag {
+    pub id: Uuid,
+    pub guild_id: i64,
+    pub name: String,
+    pub content: String,
+    pub creator_id: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub uses: i32,
 }

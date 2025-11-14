@@ -26,6 +26,7 @@ pub async fn handle_help_menu(
 
     let embed = match selection.as_str() {
         "help_tickets" => create_ticket_commands_embed(&prefix),
+        "help_tags" => create_tag_commands_embed(&prefix),
         "help_setup" => create_setup_commands_embed(&prefix),
         "help_admin" => create_admin_commands_embed(&prefix),
         "help_premium" => create_premium_commands_embed(&prefix),
@@ -171,6 +172,104 @@ pub async fn handle_setup_menu(
                     CreateInteractionResponse::Message(
                         CreateInteractionResponseMessage::new()
                             .embed(embed)
+                            .ephemeral(true),
+                    ),
+                )
+                .await?;
+        },
+        "setup_autoclose" => {
+            let guild = crate::database::ticket::get_or_create_guild(&db.pool, guild_id.get() as i64).await?;
+            let enabled = guild.autoclose_enabled.unwrap_or(false);
+            let minutes = guild.autoclose_minutes.unwrap_or(0);
+
+            let embed = create_embed(
+                "Configure Auto-Close",
+                format!(
+                    "**Current Status:** {}\n\
+                    **Time:** {}\n\n\
+                    Select a time period or disable auto-close.",
+                    if enabled { "Enabled" } else { "Disabled" },
+                    if minutes == 0 { "Not Set".to_string() } else { format!("{} minutes", minutes) }
+                )
+            ).color(0x5865F2);
+
+            let button_10m = serenity::all::CreateButton::new("autoclose_10m")
+                .label("10 minutes")
+                .style(serenity::all::ButtonStyle::Primary);
+
+            let button_30m = serenity::all::CreateButton::new("autoclose_30m")
+                .label("30 minutes")
+                .style(serenity::all::ButtonStyle::Primary);
+
+            let button_1h = serenity::all::CreateButton::new("autoclose_1h")
+                .label("1 hour")
+                .style(serenity::all::ButtonStyle::Primary);
+
+            let button_2h = serenity::all::CreateButton::new("autoclose_2h")
+                .label("2 hours")
+                .style(serenity::all::ButtonStyle::Primary);
+
+            let button_disable = serenity::all::CreateButton::new("autoclose_disable")
+                .label("Disable")
+                .style(serenity::all::ButtonStyle::Danger);
+
+            let components = vec![
+                serenity::all::CreateActionRow::Buttons(vec![button_10m, button_30m, button_1h, button_2h]),
+                serenity::all::CreateActionRow::Buttons(vec![button_disable]),
+            ];
+
+            interaction
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .embed(embed)
+                            .components(components)
+                            .ephemeral(true),
+                    ),
+                )
+                .await?;
+        },
+        "setup_ticket_limit" => {
+            let guild = crate::database::ticket::get_or_create_guild(&db.pool, guild_id.get() as i64).await?;
+            let current_limit = guild.ticket_limit_per_user.unwrap_or(1);
+
+            let embed = create_embed(
+                "Configure Ticket Limit",
+                format!(
+                    "**Current Limit:** {}\n\n\
+                    Choose how many tickets each user can have open at once.",
+                    if current_limit == 0 { "Unlimited".to_string() } else { format!("{} ticket(s)", current_limit) }
+                )
+            ).color(0x5865F2);
+
+            let button_1 = serenity::all::CreateButton::new("ticket_limit_1")
+                .label("1 Ticket")
+                .style(serenity::all::ButtonStyle::Primary);
+
+            let button_3 = serenity::all::CreateButton::new("ticket_limit_3")
+                .label("3 Tickets")
+                .style(serenity::all::ButtonStyle::Primary);
+
+            let button_5 = serenity::all::CreateButton::new("ticket_limit_5")
+                .label("5 Tickets")
+                .style(serenity::all::ButtonStyle::Primary);
+
+            let button_unlimited = serenity::all::CreateButton::new("ticket_limit_unlimited")
+                .label("Unlimited")
+                .style(serenity::all::ButtonStyle::Success);
+
+            let components = vec![
+                serenity::all::CreateActionRow::Buttons(vec![button_1, button_3, button_5, button_unlimited]),
+            ];
+
+            interaction
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .embed(embed)
+                            .components(components)
                             .ephemeral(true),
                     ),
                 )
@@ -603,6 +702,38 @@ fn create_ticket_commands_embed(prefix: &str) -> CreateEmbed {
             • `handle` - For any ticket, one-time urgent notification\n\n\
             **Note:** Use `{}doc <command>` for detailed command info",
             prefix, prefix, prefix, prefix, prefix, prefix, prefix
+        )
+    )
+    .color(0x5865F2)
+}
+
+fn create_tag_commands_embed(prefix: &str) -> CreateEmbed {
+    create_embed(
+        "Tag System",
+        format!(
+            "**Using Tags:**\n\
+            `{}tag <name>` - Display a tag\n\
+            `/tag use <name>` - Display a tag (slash)\n\n\
+            **Managing Tags:**\n\
+            `{}tag create <name> <content>` - Create new tag\n\
+            `{}tag edit <name> <new_content>` - Edit your tag\n\
+            `{}tag delete <name>` - Delete your tag\n\
+            `{}tag rename <old> <new>` - Rename your tag\n\n\
+            **Browsing Tags:**\n\
+            `{}tag list` - List all server tags\n\
+            `{}tag search <query>` - Search tags by name/content\n\
+            `{}tag popular` - Show top 10 most used tags\n\
+            `{}tag info <name>` - View tag details and stats\n\
+            `{}tag raw <name>` - View raw tag content\n\n\
+            **Slash Commands:**\n\
+            `/tag create`, `/tag edit`, `/tag delete`, `/tag info`,\n\
+            `/tag list`, `/tag search`, `/tag raw`, `/tag rename`,\n\
+            `/tag popular`, `/tag use`\n\n\
+            **Notes:**\n\
+            • Tag names are case-insensitive\n\
+            • Only tag creators can edit/delete/rename their tags\n\
+            • Use `{}doc tag` for detailed documentation",
+            prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix
         )
     )
     .color(0x5865F2)

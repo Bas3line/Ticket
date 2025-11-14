@@ -26,6 +26,8 @@ pub async fn execute(ctx: &Context, msg: &Message, db: &Arc<Database>) -> Result
             options: vec![
                 CreateSelectMenuOption::new("Ticket Commands", "help_tickets")
                     .description("Commands for managing tickets"),
+                CreateSelectMenuOption::new("Tag System", "help_tags")
+                    .description("Create and manage server tags"),
                 CreateSelectMenuOption::new("Setup & Configuration", "help_setup")
                     .description("Setup channels and bot settings"),
                 CreateSelectMenuOption::new("Admin Commands", "help_admin")

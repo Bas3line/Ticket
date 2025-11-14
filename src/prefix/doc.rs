@@ -100,6 +100,17 @@ fn get_command_docs() -> HashMap<String, CommandDoc> {
     );
 
     docs.insert(
+        "assign".to_string(),
+        CommandDoc {
+            name: "assign".to_string(),
+            description: "Assign a ticket to a specific support team member. The assigned user will receive a DM notification about the ticket assignment.".to_string(),
+            usage: "`/assign <user>` or `!assign <user>`".to_string(),
+            examples: "`/assign user: @Support1` - Assign ticket to @Support1\n`!assign @Support1` - Assign using prefix".to_string(),
+            permissions: "Support role".to_string(),
+        },
+    );
+
+    docs.insert(
         "escalate".to_string(),
         CommandDoc {
             name: "escalate".to_string(),
@@ -187,6 +198,38 @@ fn get_command_docs() -> HashMap<String, CommandDoc> {
             usage: "`/unblacklist <user>` or `!unblacklist <user>`".to_string(),
             examples: "`/unblacklist user: @user` - Remove blacklist\n`!unblacklist @user` - Prefix version".to_string(),
             permissions: "Administrator".to_string(),
+        },
+    );
+
+    docs.insert(
+        "tag".to_string(),
+        CommandDoc {
+            name: "tag".to_string(),
+            description: "Tag system for creating and managing server-wide text snippets. Tags are case-insensitive and can be used to store frequently used messages, rules, FAQs, and more.".to_string(),
+            usage: "`!tag <name>` or `/tag use <name>` - Display a tag\n\
+                `!tag create <name> <content>` - Create a new tag\n\
+                `!tag edit <name> <content>` - Edit your tag\n\
+                `!tag delete <name>` - Delete your tag\n\
+                `!tag list` - List all tags\n\
+                `!tag search <query>` - Search tags\n\
+                `!tag info <name>` - View tag details\n\
+                `!tag popular` - Show most used tags\n\
+                `!tag raw <name>` - View raw content\n\
+                `!tag rename <old> <new>` - Rename your tag".to_string(),
+            examples: "`!tag create rules Server rules: 1. Be respectful 2. No spam` - Create a rules tag\n\
+                `/tag create name: faq content: Check our FAQ at...` - Create FAQ tag (slash)\n\
+                `!tag rules` - Display the rules tag\n\
+                `/tag use name: faq` - Display FAQ tag (slash)\n\
+                `!tag edit rules Updated rules: 1. Be respectful 2. No spam 3. Use appropriate channels` - Edit tag\n\
+                `/tag edit name: rules new_content: Updated rules...` - Edit with slash\n\
+                `!tag list` - Show all server tags\n\
+                `!tag search help` - Find tags containing 'help'\n\
+                `!tag info rules` - View who created the tag and usage stats\n\
+                `!tag popular` - Show top 10 most used tags\n\
+                `!tag raw rules` - View tag content in code block\n\
+                `!tag rename rules server-rules` - Rename a tag\n\
+                `!tag delete rules` - Delete your tag".to_string(),
+            permissions: "Everyone can use tags and create their own tags. Only tag creators can edit, delete, or rename their own tags.".to_string(),
         },
     );
 

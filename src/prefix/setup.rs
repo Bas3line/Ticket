@@ -209,6 +209,10 @@ async fn show_interactive_setup(ctx: &Context, msg: &Message, db: &Arc<Database>
                     .description("Configure role to ping on ticket creation"),
                 serenity::all::CreateSelectMenuOption::new("Toggle Claim Buttons", "setup_claim")
                     .description("Enable/disable claim buttons"),
+                serenity::all::CreateSelectMenuOption::new("Configure Auto-Close", "setup_autoclose")
+                    .description("Configure automatic ticket closing"),
+                serenity::all::CreateSelectMenuOption::new("Ticket Limit", "setup_ticket_limit")
+                    .description("Set max tickets per user or allow multiple"),
                 serenity::all::CreateSelectMenuOption::new("View All Settings", "setup_settings")
                     .description("View and configure advanced settings"),
             ],

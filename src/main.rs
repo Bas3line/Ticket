@@ -38,6 +38,8 @@ impl EventHandler for Handler {
             commands::handle::register(),
             commands::claim::register(),
             commands::doc::register(),
+            commands::tag::register(),
+            commands::assign::register(),
         ];
 
         for command in commands {
@@ -73,6 +75,8 @@ impl EventHandler for Handler {
                     "handle" => commands::handle::run(&ctx, &command, &self.db).await,
                     "claim" => commands::claim::run(&ctx, &command, &self.db).await,
                     "doc" => commands::doc::run(&ctx, &command).await,
+                    "tag" => commands::tag::run(&ctx, &command, &self.db).await,
+                    "assign" => commands::assign::run(&ctx, &command, &self.db).await,
                     _ => Ok(()),
                 };
 
@@ -129,6 +133,8 @@ impl EventHandler for Handler {
                     id if id.starts_with("panel_custom_color:") => commands::panel::handle_custom_color_selection(&ctx, &component, &self.db).await,
                     id if id.starts_with("panel_finish_custom:") => commands::panel::handle_finish_custom(&ctx, &component, &self.db).await,
                     id if id.starts_with("ticket_create:") => handlers::button::handle_ticket_create_category(&ctx, &component, &self.db).await,
+                    id if id.starts_with("autoclose_") => handlers::button::handle_autoclose_button(&ctx, &component, &self.db).await,
+                    id if id.starts_with("ticket_limit_") => handlers::button::handle_ticket_limit_button(&ctx, &component, &self.db).await,
                     _ => Ok(()),
                 };
 
@@ -189,7 +195,7 @@ impl EventHandler for Handler {
             }
         }
 
-        if msg.mentions.iter().any(|u| u.id == ctx.cache.current_user().id) {
+        if msg.mentions.iter().any(|u| u.id == ctx.cache.current_user().id) && msg.referenced_message.is_none() {
             if let Err(e) = prefix::utility::bot_mention(&ctx, &msg, &self.db).await {
                 error!("Bot mention handler error: {}", e);
             }
@@ -256,6 +262,8 @@ impl EventHandler for Handler {
             if msg.author.id.get() as i64 != ticket.owner_id {
                 let _ = database::ticket::mark_ticket_has_messages(&self.db.pool, ticket.id).await;
             }
+
+            let _ = database::ticket::update_ticket_last_message(&self.db.pool, ticket.id).await;
         }
     }
 }
@@ -304,6 +312,19 @@ async fn main() -> Result<()> {
             interval.tick().await;
             if let Err(e) = process_reminders(&db_clone2, &http_clone2).await {
                 error!("Error processing reminders: {}", e);
+            }
+        }
+    });
+
+    let db_clone3 = Arc::clone(&db);
+    let http_clone3 = Arc::new(serenity::all::Http::new(&config.discord_token));
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Err(e) = process_autoclose(&db_clone3, &http_clone3).await {
+                error!("Error processing autoclose: {}", e);
             }
         }
     });
@@ -445,6 +466,50 @@ async fn process_reminders(db: &database::Database, http: &serenity::all::Http) 
         }
 
         let _ = database::ticket::mark_reminder_completed(&db.pool, reminder.id).await;
+    }
+
+    Ok(())
+}
+
+async fn process_autoclose(db: &database::Database, http: &serenity::all::Http) -> Result<()> {
+    let inactive_tickets = database::ticket::get_inactive_tickets(&db.pool).await?;
+
+    for (ticket_id, channel_id, guild_id, ticket_number) in inactive_tickets {
+        let channel = serenity::all::ChannelId::new(channel_id as u64);
+
+        let embed = utils::create_embed(
+            "Ticket Auto-Closed",
+            "This ticket has been automatically closed due to inactivity."
+        ).color(0xED4245);
+
+        let _ = channel.send_message(
+            http,
+            serenity::all::CreateMessage::new().embed(embed)
+        ).await;
+
+        let guild = database::ticket::get_or_create_guild(&db.pool, guild_id).await?;
+        if let Some(log_channel_id) = guild.log_channel_id {
+            let log_channel = serenity::all::ChannelId::new(log_channel_id as u64);
+            let log_embed = utils::create_embed(
+                "Ticket Auto-Closed",
+                format!(
+                    "Ticket #{} was automatically closed due to inactivity\nChannel: <#{}>",
+                    ticket_number,
+                    channel_id
+                )
+            ).color(0xED4245);
+
+            let _ = log_channel.send_message(
+                http,
+                serenity::all::CreateMessage::new().embed(log_embed)
+            ).await;
+        }
+
+        let _ = database::ticket::close_ticket(&db.pool, ticket_id).await;
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        let _ = channel.delete(http).await;
     }
 
     Ok(())
