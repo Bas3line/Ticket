@@ -122,7 +122,7 @@ pub async fn list_premium(ctx: &Context, msg: &Message, db: &Arc<Database>, owne
     }
 
     let premiums: Vec<crate::models::Premium> = sqlx::query_as(
-        "SELECT * FROM premium WHERE expires_at > NOW() ORDER BY expires_at DESC"
+        "SELECT id, guild_id, max_servers, expires_at, created_at, created_by FROM premium WHERE expires_at > NOW() ORDER BY expires_at DESC"
     )
     .fetch_all(&db.pool)
     .await?;

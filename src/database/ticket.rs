@@ -315,7 +315,7 @@ pub async fn add_ticket_message(
 
 pub async fn get_ticket_messages(pool: &PgPool, ticket_id: Uuid) -> Result<Vec<TicketMessage>> {
     let messages = sqlx::query_as::<_, TicketMessage>(
-        "SELECT * FROM ticket_messages WHERE ticket_id = $1 ORDER BY created_at ASC"
+        "SELECT id, ticket_id, message_id, author_id, author_name, author_discriminator, author_avatar_url, content, attachments, created_at FROM ticket_messages WHERE ticket_id = $1 ORDER BY created_at ASC"
     )
     .bind(ticket_id)
     .fetch_all(pool)
@@ -350,7 +350,7 @@ pub async fn create_ticket_panel(
 #[allow(dead_code)]
 pub async fn get_ticket_panel(pool: &PgPool, guild_id: i64, message_id: i64) -> Result<Option<TicketPanel>> {
     let panel = sqlx::query_as::<_, TicketPanel>(
-        "SELECT * FROM ticket_panel WHERE message_id = $1 AND guild_id = $2"
+        "SELECT id, guild_id, channel_id, message_id, title, description, created_at FROM ticket_panel WHERE message_id = $1 AND guild_id = $2"
     )
     .bind(message_id)
     .bind(guild_id)
@@ -399,7 +399,7 @@ pub async fn add_premium(
 
 pub async fn get_premium(pool: &PgPool, guild_id: i64) -> Result<Option<crate::models::Premium>> {
     let premium = sqlx::query_as::<_, crate::models::Premium>(
-        "SELECT * FROM premium WHERE guild_id = $1 AND expires_at > NOW()"
+        "SELECT id, guild_id, max_servers, expires_at, created_at, created_by FROM premium WHERE guild_id = $1 AND expires_at > NOW()"
     )
     .bind(guild_id)
     .fetch_optional(pool)
@@ -622,14 +622,14 @@ pub async fn is_blacklisted(pool: &PgPool, target_id: i64, target_type: &str) ->
 pub async fn get_all_blacklists(pool: &PgPool, target_type: Option<&str>) -> Result<Vec<crate::models::Blacklist>> {
     let blacklists = if let Some(t_type) = target_type {
         sqlx::query_as::<_, crate::models::Blacklist>(
-            "SELECT * FROM blacklist WHERE target_type = $1 ORDER BY created_at DESC"
+            "SELECT id, target_id, target_type, reason, blacklisted_by, created_at FROM blacklist WHERE target_type = $1 ORDER BY created_at DESC"
         )
         .bind(t_type)
         .fetch_all(pool)
         .await?
     } else {
         sqlx::query_as::<_, crate::models::Blacklist>(
-            "SELECT * FROM blacklist ORDER BY created_at DESC"
+            "SELECT id, target_id, target_type, reason, blacklisted_by, created_at FROM blacklist ORDER BY created_at DESC"
         )
         .fetch_all(pool)
         .await?
@@ -778,7 +778,7 @@ pub async fn create_reminder(
 
 pub async fn get_pending_reminders(pool: &PgPool) -> Result<Vec<Reminder>> {
     let reminders = sqlx::query_as::<_, Reminder>(
-        "SELECT * FROM reminders WHERE completed = FALSE AND remind_at <= NOW() ORDER BY remind_at ASC"
+        "SELECT id, user_id, channel_id, guild_id, message_id, reason, remind_at, created_at, completed FROM reminders WHERE completed = FALSE AND remind_at <= NOW() ORDER BY remind_at ASC"
     )
     .fetch_all(pool)
     .await?;
@@ -806,7 +806,7 @@ pub async fn delete_reminder(pool: &PgPool, reminder_id: Uuid) -> Result<()> {
 
 pub async fn get_user_reminders(pool: &PgPool, user_id: i64) -> Result<Vec<Reminder>> {
     let reminders = sqlx::query_as::<_, Reminder>(
-        "SELECT * FROM reminders WHERE user_id = $1 AND completed = FALSE ORDER BY remind_at ASC"
+        "SELECT id, user_id, channel_id, guild_id, message_id, reason, remind_at, created_at, completed FROM reminders WHERE user_id = $1 AND completed = FALSE ORDER BY remind_at ASC"
     )
     .bind(user_id)
     .fetch_all(pool)

@@ -17,7 +17,7 @@ pub async fn create_tag(pool: &PgPool, guild_id: i64, name: &str, content: &str,
 
 pub async fn get_tag(pool: &PgPool, guild_id: i64, name: &str) -> Result<Option<Tag>> {
     let tag = sqlx::query_as::<_, Tag>(
-        "SELECT * FROM tags WHERE guild_id = $1 AND LOWER(name) = LOWER($2)"
+        "SELECT id, guild_id, name, content, creator_id, created_at, updated_at, uses FROM tags WHERE guild_id = $1 AND LOWER(name) = LOWER($2)"
     )
     .bind(guild_id)
     .bind(name)
@@ -62,7 +62,7 @@ pub async fn increment_tag_uses(pool: &PgPool, guild_id: i64, name: &str) -> Res
 
 pub async fn list_tags(pool: &PgPool, guild_id: i64) -> Result<Vec<Tag>> {
     let tags = sqlx::query_as::<_, Tag>(
-        "SELECT * FROM tags WHERE guild_id = $1 ORDER BY name ASC"
+        "SELECT id, guild_id, name, content, creator_id, created_at, updated_at, uses FROM tags WHERE guild_id = $1 ORDER BY name ASC"
     )
     .bind(guild_id)
     .fetch_all(pool)
@@ -72,7 +72,7 @@ pub async fn list_tags(pool: &PgPool, guild_id: i64) -> Result<Vec<Tag>> {
 
 pub async fn get_tag_info(pool: &PgPool, guild_id: i64, name: &str) -> Result<Option<Tag>> {
     let tag = sqlx::query_as::<_, Tag>(
-        "SELECT * FROM tags WHERE guild_id = $1 AND LOWER(name) = LOWER($2)"
+        "SELECT id, guild_id, name, content, creator_id, created_at, updated_at, uses FROM tags WHERE guild_id = $1 AND LOWER(name) = LOWER($2)"
     )
     .bind(guild_id)
     .bind(name)
@@ -84,7 +84,7 @@ pub async fn get_tag_info(pool: &PgPool, guild_id: i64, name: &str) -> Result<Op
 pub async fn search_tags(pool: &PgPool, guild_id: i64, query: &str) -> Result<Vec<Tag>> {
     let pattern = format!("%{}%", query);
     let tags = sqlx::query_as::<_, Tag>(
-        "SELECT * FROM tags WHERE guild_id = $1 AND (LOWER(name) LIKE LOWER($2) OR LOWER(content) LIKE LOWER($2)) ORDER BY name ASC LIMIT 25"
+        "SELECT id, guild_id, name, content, creator_id, created_at, updated_at, uses FROM tags WHERE guild_id = $1 AND (LOWER(name) LIKE LOWER($2) OR LOWER(content) LIKE LOWER($2)) ORDER BY name ASC LIMIT 25"
     )
     .bind(guild_id)
     .bind(pattern)
@@ -95,7 +95,7 @@ pub async fn search_tags(pool: &PgPool, guild_id: i64, query: &str) -> Result<Ve
 
 pub async fn get_popular_tags(pool: &PgPool, guild_id: i64, limit: i64) -> Result<Vec<Tag>> {
     let tags = sqlx::query_as::<_, Tag>(
-        "SELECT * FROM tags WHERE guild_id = $1 ORDER BY uses DESC LIMIT $2"
+        "SELECT id, guild_id, name, content, creator_id, created_at, updated_at, uses FROM tags WHERE guild_id = $1 ORDER BY uses DESC LIMIT $2"
     )
     .bind(guild_id)
     .bind(limit)
