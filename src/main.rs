@@ -475,6 +475,11 @@ async fn process_autoclose(db: &database::Database, http: &serenity::all::Http) 
     let inactive_tickets = database::ticket::get_inactive_tickets(&db.pool).await?;
 
     for (ticket_id, channel_id, guild_id, ticket_number) in inactive_tickets {
+        let ticket = match database::ticket::get_ticket_by_id(&db.pool, ticket_id).await? {
+            Some(t) => t,
+            None => continue,
+        };
+
         let channel = serenity::all::ChannelId::new(channel_id as u64);
 
         let embed = utils::create_embed(
@@ -506,8 +511,13 @@ async fn process_autoclose(db: &database::Database, http: &serenity::all::Http) 
         }
 
         let _ = database::ticket::close_ticket(&db.pool, ticket_id).await;
+        let _ = database::ticket::delete_ticket_messages(&db.pool, ticket_id).await;
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        let mut redis_conn = db.redis.clone();
+        let _ = database::ticket::cleanup_priority_ping(&mut redis_conn, ticket_id).await;
+        let _ = database::ticket::deactivate_escalation(&db.pool, ticket_id).await;
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
         let _ = channel.delete(http).await;
     }

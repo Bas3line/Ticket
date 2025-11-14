@@ -7,7 +7,7 @@ pub async fn get_or_create_guild(pool: &PgPool, guild_id: i64) -> Result<Guild> 
     let guild = sqlx::query_as::<_, Guild>(
         "INSERT INTO guilds (guild_id) VALUES ($1)
          ON CONFLICT (guild_id) DO UPDATE SET guild_id = guilds.guild_id
-         RETURNING *"
+         RETURNING guild_id, ticket_category_id, log_channel_id, transcript_channel_id, prefix, claim_buttons_enabled, auto_close_hours, ticket_limit_per_user, ticket_cooldown_seconds, dm_on_create, embed_color, embed_title, embed_description, embed_footer, autoclose_enabled, autoclose_minutes, created_at, updated_at"
     )
     .bind(guild_id)
     .fetch_one(pool)
@@ -76,7 +76,7 @@ pub async fn create_ticket_category(
 ) -> Result<TicketCategory> {
     let category = sqlx::query_as::<_, TicketCategory>(
         "INSERT INTO ticket_categories (guild_id, name, description, emoji)
-         VALUES ($1, $2, $3, $4) RETURNING *"
+         VALUES ($1, $2, $3, $4) RETURNING id, guild_id, name, description, emoji, use_custom_welcome, custom_welcome_message, created_at"
     )
     .bind(guild_id)
     .bind(name)
@@ -114,7 +114,7 @@ pub async fn add_support_role(pool: &PgPool, guild_id: i64, role_id: i64) -> Res
     let role = sqlx::query_as::<_, SupportRole>(
         "INSERT INTO support_roles (guild_id, role_id) VALUES ($1, $2)
          ON CONFLICT (guild_id, role_id) DO UPDATE SET role_id = support_roles.role_id
-         RETURNING *"
+         RETURNING id, guild_id, role_id, created_at"
     )
     .bind(guild_id)
     .bind(role_id)
@@ -156,7 +156,7 @@ pub async fn create_ticket(
 
     let ticket = sqlx::query_as::<_, Ticket>(
         "INSERT INTO tickets (guild_id, channel_id, ticket_number, owner_id, category_id)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *"
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, guild_id, channel_id, ticket_number, owner_id, category_id, claimed_by, assigned_to, status, created_at, closed_at, priority, rating, last_activity, opening_message_id, has_messages, last_message_at"
     )
     .bind(guild_id)
     .bind(channel_id)
@@ -297,7 +297,7 @@ pub async fn add_ticket_message(
     let message = sqlx::query_as::<_, TicketMessage>(
         "INSERT INTO ticket_messages
          (ticket_id, message_id, author_id, author_name, author_discriminator, author_avatar_url, content, attachments)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *"
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, ticket_id, message_id, author_id, author_name, author_discriminator, author_avatar_url, content, attachments, created_at"
     )
     .bind(ticket_id)
     .bind(message_id)
@@ -334,7 +334,7 @@ pub async fn create_ticket_panel(
 ) -> Result<TicketPanel> {
     let panel = sqlx::query_as::<_, TicketPanel>(
         "INSERT INTO ticket_panel (guild_id, channel_id, message_id, title, description)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *"
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, guild_id, channel_id, message_id, title, description, created_at"
     )
     .bind(guild_id)
     .bind(channel_id)
@@ -385,7 +385,7 @@ pub async fn add_premium(
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (guild_id) DO UPDATE
          SET max_servers = $2, expires_at = $3
-         RETURNING *"
+         RETURNING id, guild_id, max_servers, expires_at, created_at, created_by"
     )
     .bind(guild_id)
     .bind(max_servers)
@@ -586,7 +586,7 @@ pub async fn add_blacklist(
 ) -> Result<crate::models::Blacklist> {
     let blacklist = sqlx::query_as::<_, crate::models::Blacklist>(
         "INSERT INTO blacklist (target_id, target_type, reason, blacklisted_by)
-         VALUES ($1, $2, $3, $4) RETURNING *"
+         VALUES ($1, $2, $3, $4) RETURNING id, target_id, target_type, reason, blacklisted_by, created_at"
     )
     .bind(target_id)
     .bind(target_type)
@@ -762,7 +762,7 @@ pub async fn create_reminder(
 ) -> Result<Reminder> {
     let reminder = sqlx::query_as::<_, Reminder>(
         "INSERT INTO reminders (user_id, channel_id, guild_id, message_id, reason, remind_at)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *"
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, user_id, channel_id, guild_id, message_id, reason, remind_at, created_at, completed"
     )
     .bind(user_id)
     .bind(channel_id)

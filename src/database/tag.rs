@@ -4,7 +4,7 @@ use crate::models::Tag;
 
 pub async fn create_tag(pool: &PgPool, guild_id: i64, name: &str, content: &str, creator_id: i64) -> Result<Tag> {
     let tag = sqlx::query_as::<_, Tag>(
-        "INSERT INTO tags (guild_id, name, content, creator_id) VALUES ($1, $2, $3, $4) RETURNING *"
+        "INSERT INTO tags (guild_id, name, content, creator_id) VALUES ($1, $2, $3, $4) RETURNING id, guild_id, name, content, creator_id, created_at, updated_at, uses"
     )
     .bind(guild_id)
     .bind(name)
