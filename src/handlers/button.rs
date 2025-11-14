@@ -581,20 +581,24 @@ pub async fn handle_ticket_create_category(
         return Ok(());
     }
 
-    let ticket_category_id = match guild_data.ticket_category_id {
-        Some(id) => serenity::all::ChannelId::new(id as u64),
-        None => {
-            interaction
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content("Ticket category not configured")
-                            .ephemeral(true),
-                    ),
-                )
-                .await?;
-            return Ok(());
+    let category_id_discord = if let Some(available_cat) = crate::database::ticket::find_available_category(ctx, &db.pool, category_uuid, guild_id.get() as i64).await? {
+        serenity::all::ChannelId::new(available_cat)
+    } else {
+        match guild_data.ticket_category_id {
+            Some(id) => serenity::all::ChannelId::new(id as u64),
+            None => {
+                interaction
+                    .create_response(
+                        &ctx.http,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .content("Ticket category not configured")
+                                .ephemeral(true),
+                        ),
+                    )
+                    .await?;
+                return Ok(());
+            }
         }
     };
 
@@ -607,7 +611,7 @@ pub async fn handle_ticket_create_category(
             &ctx.http,
             serenity::all::CreateChannel::new(temp_name)
                 .kind(serenity::all::ChannelType::Text)
-                .category(ticket_category_id)
+                .category(category_id_discord)
                 .permissions(vec![
                     serenity::all::PermissionOverwrite {
                         allow: serenity::all::Permissions::VIEW_CHANNEL
@@ -634,8 +638,15 @@ pub async fn handle_ticket_create_category(
     )
     .await?;
 
-    // Rename channel to ticket-userid
-    ticket_channel.edit(&ctx.http, serenity::all::EditChannel::new().name(format!("ticket-{}", user_id))).await?;
+    // Rename channel to use custom template
+    let channel_name_template = guild_data.channel_name_template.unwrap_or_else(|| "ticket-$ticket_number".to_string());
+    let channel_name = crate::database::ticket::format_channel_name(
+        &channel_name_template,
+        ticket.ticket_number,
+        user_id,
+        &member.user.name
+    );
+    ticket_channel.edit(&ctx.http, serenity::all::EditChannel::new().name(channel_name)).await?;
 
     info!("Created ticket {} in channel {} for user {} (category: {})", ticket.ticket_number, ticket_channel.id.get(), user_id, category_name);
 
@@ -736,44 +747,6 @@ pub async fn handle_ticket_create_category(
     Ok(())
 }
 
-pub async fn handle_autoclose_button(
-    ctx: &Context,
-    interaction: &ComponentInteraction,
-    db: &Database,
-) -> Result<()> {
-    let guild_id = interaction.guild_id.ok_or_else(|| anyhow::anyhow!("Not in a guild"))?.get() as i64;
-
-    let custom_id = &interaction.data.custom_id;
-
-    let (enabled, minutes, label) = match custom_id.as_str() {
-        "autoclose_10m" => (true, Some(10), "10 minutes"),
-        "autoclose_30m" => (true, Some(30), "30 minutes"),
-        "autoclose_1h" => (true, Some(60), "1 hour"),
-        "autoclose_2h" => (true, Some(120), "2 hours"),
-        "autoclose_disable" => (false, None, "Disabled"),
-        _ => return Ok(()),
-    };
-
-    crate::database::ticket::update_autoclose_settings(&db.pool, guild_id, enabled, minutes).await?;
-
-    let embed = create_success_embed(
-        "Auto-Close Updated",
-        format!("Auto-close has been set to: **{}**", label)
-    );
-
-    interaction
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .embed(embed)
-                    .ephemeral(true),
-            ),
-        )
-        .await?;
-
-    Ok(())
-}
 
 pub async fn handle_ticket_limit_button(
     ctx: &Context,

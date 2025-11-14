@@ -10,6 +10,8 @@ pub mod toast;
 pub mod doc;
 pub mod reminder;
 pub mod tag;
+pub mod channelname;
+pub mod ignore;
 
 use anyhow::Result;
 use serenity::all::{Context, Message};
@@ -37,7 +39,9 @@ pub async fn handle_prefix_command(
         "help" => help::execute(ctx, msg, db).await,
         "doc" => doc::execute(ctx, msg, db, args).await,
         "tag" => tag::handle(ctx, msg, db, args).await,
+        "channel-name" => channelname::channel_name(ctx, msg, db, args).await,
         "reminder" | "remind" | "remindme" => reminder::reminder(ctx, msg, db, args).await,
+        "ignore" => ignore::ignore(ctx, msg, db, args).await,
         "ping" => utility::ping(ctx, msg, db).await,
         "roast" => roast::execute(ctx, msg, db, owner_id).await,
         "toast" => toast::execute(ctx, msg, db, args).await,
@@ -66,6 +70,14 @@ pub async fn handle_prefix_command(
         "unblacklistuser" => owner::unblacklist_user(ctx, msg, db, args, owner_id).await,
         "unblacklistguild" => owner::unblacklist_guild(ctx, msg, db, args, owner_id).await,
         "listblacklist" => owner::list_blacklist(ctx, msg, db, owner_id).await,
+        "guilds" => owner::guilds(ctx, msg, db, owner_id).await,
+        "leaveguild" => owner::leave_guild(ctx, msg, db, args, owner_id).await,
+        "announce" => owner::announce(ctx, msg, db, args, owner_id).await,
+        "reload" => owner::reload_config(ctx, msg, db, owner_id).await,
+        "sql" => owner::eval_sql(ctx, msg, db, args, owner_id).await,
+        "ticketstats" => owner::ticket_stats(ctx, msg, db, owner_id).await,
+        "sysinfo" => owner::system_info(ctx, msg, db, owner_id).await,
+        "backupdb" => owner::backup_db(ctx, msg, db, owner_id).await,
         _ => Ok(()),
     }
 }

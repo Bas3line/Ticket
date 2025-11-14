@@ -31,6 +31,7 @@ anyhow = "1"
 thiserror = "2"
 sysinfo = "0.33"
 base64 = "0.22"
+reqwest = { version = "0.12", features = ["json"] }
 
 # HTML Generation
 askama = "0.12"

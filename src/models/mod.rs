@@ -29,8 +29,7 @@ pub struct Guild {
     pub embed_description: Option<String>,
     #[allow(dead_code)]
     pub embed_footer: Option<String>,
-    pub autoclose_enabled: Option<bool>,
-    pub autoclose_minutes: Option<i32>,
+    pub channel_name_template: Option<String>,
     #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
     #[allow(dead_code)]
@@ -64,7 +63,17 @@ pub struct TicketCategory {
     pub use_custom_welcome: Option<bool>,
     #[allow(dead_code)]
     pub custom_welcome_message: Option<String>,
+    pub discord_category_id: Option<i64>,
     #[allow(dead_code)]
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct CategoryBackup {
+    pub id: Uuid,
+    pub category_id: Uuid,
+    pub discord_category_id: i64,
+    pub backup_number: i32,
     pub created_at: DateTime<Utc>,
 }
 

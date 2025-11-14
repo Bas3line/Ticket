@@ -177,59 +177,6 @@ pub async fn handle_setup_menu(
                 )
                 .await?;
         },
-        "setup_autoclose" => {
-            let guild = crate::database::ticket::get_or_create_guild(&db.pool, guild_id.get() as i64).await?;
-            let enabled = guild.autoclose_enabled.unwrap_or(false);
-            let minutes = guild.autoclose_minutes.unwrap_or(0);
-
-            let embed = create_embed(
-                "Configure Auto-Close",
-                format!(
-                    "**Current Status:** {}\n\
-                    **Time:** {}\n\n\
-                    Select a time period or disable auto-close.",
-                    if enabled { "Enabled" } else { "Disabled" },
-                    if minutes == 0 { "Not Set".to_string() } else { format!("{} minutes", minutes) }
-                )
-            ).color(0x5865F2);
-
-            let button_10m = serenity::all::CreateButton::new("autoclose_10m")
-                .label("10 minutes")
-                .style(serenity::all::ButtonStyle::Primary);
-
-            let button_30m = serenity::all::CreateButton::new("autoclose_30m")
-                .label("30 minutes")
-                .style(serenity::all::ButtonStyle::Primary);
-
-            let button_1h = serenity::all::CreateButton::new("autoclose_1h")
-                .label("1 hour")
-                .style(serenity::all::ButtonStyle::Primary);
-
-            let button_2h = serenity::all::CreateButton::new("autoclose_2h")
-                .label("2 hours")
-                .style(serenity::all::ButtonStyle::Primary);
-
-            let button_disable = serenity::all::CreateButton::new("autoclose_disable")
-                .label("Disable")
-                .style(serenity::all::ButtonStyle::Danger);
-
-            let components = vec![
-                serenity::all::CreateActionRow::Buttons(vec![button_10m, button_30m, button_1h, button_2h]),
-                serenity::all::CreateActionRow::Buttons(vec![button_disable]),
-            ];
-
-            interaction
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .embed(embed)
-                            .components(components)
-                            .ephemeral(true),
-                    ),
-                )
-                .await?;
-        },
         "setup_ticket_limit" => {
             let guild = crate::database::ticket::get_or_create_guild(&db.pool, guild_id.get() as i64).await?;
             let current_limit = guild.ticket_limit_per_user.unwrap_or(1);
@@ -686,6 +633,7 @@ fn create_ticket_commands_embed(prefix: &str) -> CreateEmbed {
             "**Prefix Commands:**\n\
             `{}close` - Close current ticket and generate transcript\n\
             `{}claim` - Claim ticket and stop escalations\n\
+            `{}assign @user` - Assign ticket to another user\n\
             `{}escalate` - DM support + hourly reminders until claimed (unanswered only)\n\
             `{}handle` - One-time urgent DM to all support staff\n\
             `{}transcript` - Generate and download transcript\n\
@@ -693,6 +641,7 @@ fn create_ticket_commands_embed(prefix: &str) -> CreateEmbed {
             **Slash Commands:**\n\
             `/close` - Close ticket channel\n\
             `/claim` - Claim ticket as yours\n\
+            `/assign <user>` - Assign ticket to another user\n\
             `/escalate` - DM support + hourly reminders (unanswered tickets)\n\
             `/handle` - One-time urgent notification to support staff\n\
             `/priority <level>` - Set priority (low/normal/high/urgent)\n\
@@ -701,7 +650,7 @@ fn create_ticket_commands_embed(prefix: &str) -> CreateEmbed {
             • `escalate` - For unanswered tickets, sends hourly DM reminders\n\
             • `handle` - For any ticket, one-time urgent notification\n\n\
             **Note:** Use `{}doc <command>` for detailed command info",
-            prefix, prefix, prefix, prefix, prefix, prefix, prefix
+            prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix
         )
     )
     .color(0x5865F2)
@@ -746,7 +695,17 @@ fn create_setup_commands_embed(prefix: &str) -> CreateEmbed {
             "**Basic Setup:**\n\
             `{}setup` - Interactive setup wizard with dropdown menus\n\
             `{}prefix <new>` - Change bot prefix (default: `!`)\n\
-            `{}settings` - View all server settings\n\n\
+            `{}settings` - View all server settings\n\
+            `{}channel-name <template>` - Set custom ticket channel names\n\
+            `{}ignore <add|remove|list> [channel]` - Manage ignored channels\n\n\
+            **Channel Name Templates:**\n\
+            Variables: `$ticket_number`, `$user_id`, `$user_name`\n\
+            Example: `{}channel-name ticket-$user_name-$ticket_number`\n\
+            Use `{}channel-name` alone to see full docs\n\n\
+            **Ignore Channels:**\n\
+            `{}ignore add <#channel>` - Bot ignores messages in channel\n\
+            `{}ignore remove <#channel>` - Bot responds in channel again\n\
+            `{}ignore list` - Show all ignored channels\n\n\
             **Setup Options:**\n\
             • Ticket category channel\n\
             • Log channel for ticket events\n\
@@ -768,7 +727,7 @@ fn create_setup_commands_embed(prefix: &str) -> CreateEmbed {
             `{}settings embedtitle <text>` - Panel embed title\n\
             `{}settings embeddescription <text>` - Panel description\n\
             `{}settings embedfooter <text>` - Panel embed footer",
-            prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix
+            prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix
         )
     )
     .color(0x5865F2)
@@ -810,6 +769,8 @@ fn create_premium_commands_embed(prefix: &str) -> CreateEmbed {
             "`{}profile` - View your server's premium status\n\n\
             **Premium Benefits:**\n\
             • **Up to 30 panels** (free: 1 panel)\n\
+            • **Backup categories** (up to 4 per category, auto-failover at 50 channels)\n\
+            • **Custom channel names** with template variables\n\
             • **Multiple tickets per user** (configurable limit)\n\
             • **Custom embed colors** and branding\n\
             • **Advanced customization** (images, thumbnails, footers)\n\

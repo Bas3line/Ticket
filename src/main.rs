@@ -5,11 +5,12 @@ mod handlers;
 mod models;
 mod prefix;
 mod utils;
+mod logging;
 
 use anyhow::Result;
 use serenity::all::{
     Client, Context, CreateInteractionResponse, CreateInteractionResponseMessage, EventHandler,
-    GatewayIntents, Interaction, Message, Ready,
+    GatewayIntents, Interaction, Message, Ready, ActivityData, OnlineStatus,
 };
 use std::sync::Arc;
 use tracing::{error, info};
@@ -23,6 +24,8 @@ struct Handler {
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         info!("{} is connected and ready!", ready.user.name);
+
+        ctx.set_presence(Some(ActivityData::custom("!help | easy tickets")), OnlineStatus::Idle);
 
         let commands = vec![
             commands::setup::register(),
@@ -40,6 +43,7 @@ impl EventHandler for Handler {
             commands::doc::register(),
             commands::tag::register(),
             commands::assign::register(),
+            commands::channelname::register(),
         ];
 
         for command in commands {
@@ -51,16 +55,51 @@ impl EventHandler for Handler {
         info!("Commands registered successfully");
     }
 
-    async fn guild_create(&self, ctx: Context, guild: serenity::all::Guild, _is_new: Option<bool>) {
+    async fn guild_create(&self, ctx: Context, guild: serenity::all::Guild, is_new: Option<bool>) {
+        if is_new == Some(true) {
+            logging::guild::log_guild_join(
+                guild.id.get(),
+                &guild.name,
+                guild.member_count,
+                guild.owner_id.get()
+            ).await;
+        }
+
         if let Ok(true) = database::ticket::is_blacklisted(&self.db.pool, guild.id.get() as i64, "guild").await {
             info!("Leaving blacklisted guild: {} ({})", guild.name, guild.id);
             let _ = guild.id.leave(&ctx.http).await;
         }
     }
 
+    async fn guild_delete(&self, _ctx: Context, _incomplete: serenity::all::UnavailableGuild, _full: Option<serenity::all::Guild>) {
+        if let Some(guild) = _full {
+            logging::guild::log_guild_leave(
+                guild.id.get(),
+                &guild.name,
+                guild.member_count
+            ).await;
+        }
+    }
+
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         match interaction {
             Interaction::Command(command) => {
+                let guild_id = command.guild_id.map(|g| g.get());
+                let guild_name = command.guild_id.and_then(|g| ctx.cache.guild(g)).map(|g| g.name.clone());
+                let options_str = command.data.options().iter()
+                    .map(|o| format!("{}={:?}", o.name, o.value))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                logging::commands::log_slash_command(
+                    guild_id,
+                    guild_name.as_deref(),
+                    command.user.id.get(),
+                    &command.user.name,
+                    &command.data.name,
+                    &options_str
+                ).await;
+
                 let result = match command.data.name.as_str() {
                     "setup" => commands::setup::run(&ctx, &command, &self.db).await,
                     "supportrole" => commands::supportrole::run(&ctx, &command, &self.db).await,
@@ -77,6 +116,7 @@ impl EventHandler for Handler {
                     "doc" => commands::doc::run(&ctx, &command).await,
                     "tag" => commands::tag::run(&ctx, &command, &self.db).await,
                     "assign" => commands::assign::run(&ctx, &command, &self.db).await,
+                    "channel-name" => commands::channelname::run(&ctx, &command, &self.db).await,
                     _ => Ok(()),
                 };
 
@@ -96,6 +136,34 @@ impl EventHandler for Handler {
                 }
             }
             Interaction::Component(component) => {
+                let guild_id = component.guild_id.map(|g| g.get());
+                let guild_name = component.guild_id.and_then(|g| ctx.cache.guild(g)).map(|g| g.name.clone());
+
+                match &component.data.kind {
+                    serenity::all::ComponentInteractionDataKind::Button => {
+                        logging::interactions::log_button_interaction(
+                            guild_id,
+                            guild_name.as_deref(),
+                            component.user.id.get(),
+                            &component.user.name,
+                            &component.data.custom_id,
+                            component.channel_id.get()
+                        ).await;
+                    },
+                    serenity::all::ComponentInteractionDataKind::StringSelect { values } => {
+                        logging::interactions::log_select_menu_interaction(
+                            guild_id,
+                            guild_name.as_deref(),
+                            component.user.id.get(),
+                            &component.user.name,
+                            &component.data.custom_id,
+                            values,
+                            component.channel_id.get()
+                        ).await;
+                    },
+                    _ => {}
+                }
+
                 let result = match component.data.custom_id.as_str() {
                     "ticket_create" => handlers::button::handle_ticket_create(&ctx, &component, &self.db).await,
                     "ticket_claim" => handlers::button::handle_ticket_claim(&ctx, &component, &self.db).await,
@@ -133,7 +201,6 @@ impl EventHandler for Handler {
                     id if id.starts_with("panel_custom_color:") => commands::panel::handle_custom_color_selection(&ctx, &component, &self.db).await,
                     id if id.starts_with("panel_finish_custom:") => commands::panel::handle_finish_custom(&ctx, &component, &self.db).await,
                     id if id.starts_with("ticket_create:") => handlers::button::handle_ticket_create_category(&ctx, &component, &self.db).await,
-                    id if id.starts_with("autoclose_") => handlers::button::handle_autoclose_button(&ctx, &component, &self.db).await,
                     id if id.starts_with("ticket_limit_") => handlers::button::handle_ticket_limit_button(&ctx, &component, &self.db).await,
                     _ => Ok(()),
                 };
@@ -154,6 +221,18 @@ impl EventHandler for Handler {
                 }
             }
             Interaction::Modal(modal) => {
+                let guild_id = modal.guild_id.map(|g| g.get());
+                let guild_name = modal.guild_id.and_then(|g| ctx.cache.guild(g)).map(|g| g.name.clone());
+
+                logging::interactions::log_modal_interaction(
+                    guild_id,
+                    guild_name.as_deref(),
+                    modal.user.id.get(),
+                    &modal.user.name,
+                    &modal.data.custom_id,
+                    modal.channel_id.get()
+                ).await;
+
                 let result = match modal.data.custom_id.as_str() {
                     "panel_edit_modal" => handlers::menus::handle_panel_edit_modal(&ctx, &modal, &self.db).await,
                     "category_add_modal" => handlers::menus::handle_category_add_modal(&ctx, &modal, &self.db).await,
@@ -206,6 +285,29 @@ impl EventHandler for Handler {
         let prefix = prefix::get_prefix(&self.db.pool, guild_id).await;
 
         if msg.content.starts_with(&prefix) {
+            if let Some(gid) = msg.guild_id {
+                if let Ok(true) = database::ignore::is_channel_ignored(&self.db.pool, gid.get() as i64, msg.channel_id.get() as i64).await {
+                    return;
+                }
+            }
+
+            let content = msg.content.strip_prefix(&prefix).unwrap_or(&msg.content);
+            let parts: Vec<&str> = content.split_whitespace().collect();
+            if !parts.is_empty() {
+                let command = parts[0];
+                let args = parts[1..].join(" ");
+                let guild_name = msg.guild_id.and_then(|g| ctx.cache.guild(g)).map(|g| g.name.clone());
+
+                logging::commands::log_prefix_command(
+                    msg.guild_id.map(|g| g.get()),
+                    guild_name.as_deref(),
+                    msg.author.id.get(),
+                    &msg.author.name,
+                    command,
+                    &args
+                ).await;
+            }
+
             if let Err(e) = prefix::handle_prefix_command(&ctx, &msg, &self.db, &prefix, self.owner_id).await {
                 error!("Prefix command error: {}", e);
             }
@@ -279,6 +381,8 @@ async fn main() -> Result<()> {
 
     let config = config::Config::from_env()?;
 
+    logging::webhooks::init_webhooks(&config);
+
     info!("Connecting to database...");
     let db = Arc::new(
         database::Database::new(&config.database_url, &config.redis_url).await?,
@@ -316,18 +420,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    let db_clone3 = Arc::clone(&db);
-    let http_clone3 = Arc::new(serenity::all::Http::new(&config.discord_token));
-
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            if let Err(e) = process_autoclose(&db_clone3, &http_clone3).await {
-                error!("Error processing autoclose: {}", e);
-            }
-        }
-    });
 
     let mut client = Client::builder(&config.discord_token, intents)
         .event_handler(Handler {
@@ -471,56 +563,3 @@ async fn process_reminders(db: &database::Database, http: &serenity::all::Http) 
     Ok(())
 }
 
-async fn process_autoclose(db: &database::Database, http: &serenity::all::Http) -> Result<()> {
-    let inactive_tickets = database::ticket::get_inactive_tickets(&db.pool).await?;
-
-    for (ticket_id, channel_id, guild_id, ticket_number) in inactive_tickets {
-        let ticket = match database::ticket::get_ticket_by_id(&db.pool, ticket_id).await? {
-            Some(t) => t,
-            None => continue,
-        };
-
-        let channel = serenity::all::ChannelId::new(channel_id as u64);
-
-        let embed = utils::create_embed(
-            "Ticket Auto-Closed",
-            "This ticket has been automatically closed due to inactivity."
-        ).color(0xED4245);
-
-        let _ = channel.send_message(
-            http,
-            serenity::all::CreateMessage::new().embed(embed)
-        ).await;
-
-        let guild = database::ticket::get_or_create_guild(&db.pool, guild_id).await?;
-        if let Some(log_channel_id) = guild.log_channel_id {
-            let log_channel = serenity::all::ChannelId::new(log_channel_id as u64);
-            let log_embed = utils::create_embed(
-                "Ticket Auto-Closed",
-                format!(
-                    "Ticket #{} was automatically closed due to inactivity\nChannel: <#{}>",
-                    ticket_number,
-                    channel_id
-                )
-            ).color(0xED4245);
-
-            let _ = log_channel.send_message(
-                http,
-                serenity::all::CreateMessage::new().embed(log_embed)
-            ).await;
-        }
-
-        let _ = database::ticket::close_ticket(&db.pool, ticket_id).await;
-        let _ = database::ticket::delete_ticket_messages(&db.pool, ticket_id).await;
-
-        let mut redis_conn = db.redis.clone();
-        let _ = database::ticket::cleanup_priority_ping(&mut redis_conn, ticket_id).await;
-        let _ = database::ticket::deactivate_escalation(&db.pool, ticket_id).await;
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        let _ = channel.delete(http).await;
-    }
-
-    Ok(())
-}

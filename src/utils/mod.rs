@@ -73,7 +73,7 @@ pub async fn close_ticket_unified(
         "SELECT guild_id, ticket_category_id, log_channel_id, transcript_channel_id, prefix,
                 claim_buttons_enabled, auto_close_hours, ticket_limit_per_user, ticket_cooldown_seconds,
                 dm_on_create, embed_color, embed_title, embed_description, embed_footer,
-                autoclose_enabled, autoclose_minutes, created_at, updated_at
+                channel_name_template, created_at, updated_at
          FROM guilds WHERE guild_id = $1"
     )
     .bind(ticket.guild_id)

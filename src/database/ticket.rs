@@ -7,7 +7,7 @@ pub async fn get_or_create_guild(pool: &PgPool, guild_id: i64) -> Result<Guild> 
     let guild = sqlx::query_as::<_, Guild>(
         "INSERT INTO guilds (guild_id) VALUES ($1)
          ON CONFLICT (guild_id) DO UPDATE SET guild_id = guilds.guild_id
-         RETURNING guild_id, ticket_category_id, log_channel_id, transcript_channel_id, prefix, claim_buttons_enabled, auto_close_hours, ticket_limit_per_user, ticket_cooldown_seconds, dm_on_create, embed_color, embed_title, embed_description, embed_footer, autoclose_enabled, autoclose_minutes, created_at, updated_at"
+         RETURNING guild_id, ticket_category_id, log_channel_id, transcript_channel_id, prefix, claim_buttons_enabled, auto_close_hours, ticket_limit_per_user, ticket_cooldown_seconds, dm_on_create, embed_color, embed_title, embed_description, embed_footer, channel_name_template, created_at, updated_at"
     )
     .bind(guild_id)
     .fetch_one(pool)
@@ -76,7 +76,7 @@ pub async fn create_ticket_category(
 ) -> Result<TicketCategory> {
     let category = sqlx::query_as::<_, TicketCategory>(
         "INSERT INTO ticket_categories (guild_id, name, description, emoji)
-         VALUES ($1, $2, $3, $4) RETURNING id, guild_id, name, description, emoji, use_custom_welcome, custom_welcome_message, created_at"
+         VALUES ($1, $2, $3, $4) RETURNING id, guild_id, name, description, emoji, use_custom_welcome, custom_welcome_message, discord_category_id, created_at"
     )
     .bind(guild_id)
     .bind(name)
@@ -90,7 +90,7 @@ pub async fn create_ticket_category(
 
 pub async fn get_ticket_categories(pool: &PgPool, guild_id: i64) -> Result<Vec<TicketCategory>> {
     let categories = sqlx::query_as::<_, TicketCategory>(
-        "SELECT id, guild_id, name, description, emoji, use_custom_welcome, custom_welcome_message, created_at FROM ticket_categories WHERE guild_id = $1 ORDER BY created_at ASC"
+        "SELECT id, guild_id, name, description, emoji, use_custom_welcome, custom_welcome_message, discord_category_id, created_at FROM ticket_categories WHERE guild_id = $1 ORDER BY created_at ASC"
     )
     .bind(guild_id)
     .fetch_all(pool)
@@ -544,38 +544,6 @@ pub async fn update_embed_settings(
     Ok(())
 }
 
-pub async fn update_autoclose_settings(
-    pool: &PgPool,
-    guild_id: i64,
-    enabled: bool,
-    minutes: Option<i32>,
-) -> Result<()> {
-    sqlx::query("UPDATE guilds SET autoclose_enabled = $1, autoclose_minutes = $2 WHERE guild_id = $3")
-        .bind(enabled)
-        .bind(minutes)
-        .bind(guild_id)
-        .execute(pool)
-        .await?;
-
-    Ok(())
-}
-
-pub async fn get_inactive_tickets(pool: &PgPool) -> Result<Vec<(Uuid, i64, i64, i32)>> {
-    let tickets = sqlx::query_as::<_, (Uuid, i64, i64, i32)>(
-        "SELECT t.id, t.channel_id, t.guild_id, t.ticket_number
-         FROM tickets t
-         INNER JOIN guilds g ON t.guild_id = g.guild_id
-         WHERE g.autoclose_enabled = TRUE
-         AND g.autoclose_minutes IS NOT NULL
-         AND t.last_message_at IS NOT NULL
-         AND t.status = 'open'
-         AND t.last_message_at < NOW() - (g.autoclose_minutes || ' minutes')::INTERVAL"
-    )
-    .fetch_all(pool)
-    .await?;
-
-    Ok(tickets)
-}
 
 pub async fn add_blacklist(
     pool: &PgPool,
@@ -814,3 +782,129 @@ pub async fn get_user_reminders(pool: &PgPool, user_id: i64) -> Result<Vec<Remin
 
     Ok(reminders)
 }
+
+// Backup Category Functions
+
+pub async fn update_category_discord_id(pool: &PgPool, category_id: Uuid, discord_category_id: i64) -> Result<()> {
+    sqlx::query("UPDATE ticket_categories SET discord_category_id = $1 WHERE id = $2")
+        .bind(discord_category_id)
+        .bind(category_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn create_backup_category(
+    pool: &PgPool,
+    category_id: Uuid,
+    discord_category_id: i64,
+    backup_number: i32,
+) -> Result<crate::models::CategoryBackup> {
+    let backup = sqlx::query_as::<_, crate::models::CategoryBackup>(
+        "INSERT INTO category_backups (category_id, discord_category_id, backup_number)
+         VALUES ($1, $2, $3) RETURNING id, category_id, discord_category_id, backup_number, created_at"
+    )
+    .bind(category_id)
+    .bind(discord_category_id)
+    .bind(backup_number)
+    .fetch_one(pool)
+    .await?;
+    Ok(backup)
+}
+
+pub async fn get_backup_categories(pool: &PgPool, category_id: Uuid) -> Result<Vec<crate::models::CategoryBackup>> {
+    let backups = sqlx::query_as::<_, crate::models::CategoryBackup>(
+        "SELECT id, category_id, discord_category_id, backup_number, created_at
+         FROM category_backups WHERE category_id = $1 ORDER BY backup_number ASC"
+    )
+    .bind(category_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(backups)
+}
+
+pub async fn delete_backup_category(pool: &PgPool, backup_id: Uuid) -> Result<()> {
+    sqlx::query("DELETE FROM category_backups WHERE id = $1")
+        .bind(backup_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn count_channels_in_category(ctx: &serenity::all::Context, discord_category_id: u64) -> Result<usize> {
+    let guild_channels = ctx.cache.guild_channels(serenity::all::GuildId::new(discord_category_id));
+
+    if let Some(channels) = guild_channels {
+        let count = channels.values().filter(|ch| {
+            ch.parent_id == Some(serenity::all::ChannelId::new(discord_category_id))
+        }).count();
+        Ok(count)
+    } else {
+        Ok(0)
+    }
+}
+
+pub async fn find_available_category(
+    ctx: &serenity::all::Context,
+    pool: &PgPool,
+    category_id: Uuid,
+    guild_id: i64,
+) -> Result<Option<u64>> {
+    // Check if guild has premium
+    let has_premium = is_premium(pool, guild_id).await?;
+
+    if !has_premium {
+        // Non-premium guilds cannot use backup categories
+        return Ok(None);
+    }
+
+    // Get the category
+    let categories = get_ticket_categories(pool, guild_id).await?;
+    let category = categories.iter().find(|c| c.id == category_id);
+
+    if let Some(cat) = category {
+        if let Some(primary_id) = cat.discord_category_id {
+            // Check primary category channel count
+            let primary_count = count_channels_in_category(ctx, primary_id as u64).await?;
+
+            if primary_count < 50 {
+                return Ok(Some(primary_id as u64));
+            }
+
+            // Primary is full, check backup categories
+            let backups = get_backup_categories(pool, category_id).await?;
+
+            for backup in backups {
+                let backup_count = count_channels_in_category(ctx, backup.discord_category_id as u64).await?;
+                if backup_count < 50 {
+                    return Ok(Some(backup.discord_category_id as u64));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+pub async fn update_channel_name_template(pool: &PgPool, guild_id: i64, template: &str) -> Result<()> {
+    sqlx::query("UPDATE guilds SET channel_name_template = $1 WHERE guild_id = $2")
+        .bind(template)
+        .bind(guild_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub fn format_channel_name(template: &str, ticket_number: i32, user_id: i64, username: &str) -> String {
+    template
+        .replace("$ticket_number", &ticket_number.to_string())
+        .replace("$user_id", &user_id.to_string())
+        .replace("$user_name", username)
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+

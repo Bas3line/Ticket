@@ -4,6 +4,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 
 pub mod ticket;
 pub mod tag;
+pub mod ignore;
 
 #[derive(Clone)]
 pub struct Database {
@@ -19,8 +20,12 @@ impl Database {
             .connect(database_url)
             .await?;
 
+        crate::logging::database::log_postgres_connection().await;
+
         let redis_client = redis::Client::open(redis_url)?;
         let redis = ConnectionManager::new(redis_client).await?;
+
+        crate::logging::database::log_redis_connection().await;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
 

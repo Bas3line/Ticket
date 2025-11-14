@@ -13,3 +13,4 @@ pub mod claim;
 pub mod doc;
 pub mod tag;
 pub mod assign;
+pub mod channelname;
