@@ -70,7 +70,11 @@ pub async fn close_ticket_unified(
     let filepath = transcript::save_transcript(ticket.guild_id, ticket.ticket_number, html).await?;
 
     if let Ok(guild) = sqlx::query_as::<_, crate::models::Guild>(
-        "SELECT * FROM guilds WHERE guild_id = $1"
+        "SELECT guild_id, ticket_category_id, log_channel_id, transcript_channel_id, prefix,
+                claim_buttons_enabled, auto_close_hours, ticket_limit_per_user, ticket_cooldown_seconds,
+                dm_on_create, embed_color, embed_title, embed_description, embed_footer,
+                autoclose_enabled, autoclose_minutes, created_at, updated_at
+         FROM guilds WHERE guild_id = $1"
     )
     .bind(ticket.guild_id)
     .fetch_one(&db.pool)

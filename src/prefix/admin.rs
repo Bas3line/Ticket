@@ -329,7 +329,10 @@ pub async fn priority(ctx: &Context, msg: &Message, db: &Arc<Database>, args: &[
                 }
 
                 let ticket_check = sqlx::query_as::<_, crate::models::Ticket>(
-                    "SELECT * FROM tickets WHERE id = $1"
+                    "SELECT id, guild_id, channel_id, ticket_number, owner_id, category_id, claimed_by, assigned_to,
+                            status, created_at, closed_at, priority, rating, last_activity, opening_message_id,
+                            has_messages, last_message_at
+                     FROM tickets WHERE id = $1"
                 )
                 .bind(ticket_id)
                 .fetch_optional(&db_clone.pool)

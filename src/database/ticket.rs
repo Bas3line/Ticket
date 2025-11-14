@@ -182,7 +182,10 @@ async fn get_next_ticket_number(pool: &PgPool, guild_id: i64) -> Result<i32> {
 
 pub async fn get_ticket_by_channel(pool: &PgPool, channel_id: i64) -> Result<Option<Ticket>> {
     let ticket = sqlx::query_as::<_, Ticket>(
-        "SELECT * FROM tickets WHERE channel_id = $1 LIMIT 1"
+        "SELECT id, guild_id, channel_id, ticket_number, owner_id, category_id, claimed_by, assigned_to,
+                status, created_at, closed_at, priority, rating, last_activity, opening_message_id,
+                has_messages, last_message_at
+         FROM tickets WHERE channel_id = $1 LIMIT 1"
     )
     .bind(channel_id)
     .fetch_optional(pool)
@@ -194,7 +197,10 @@ pub async fn get_ticket_by_channel(pool: &PgPool, channel_id: i64) -> Result<Opt
 #[allow(dead_code)]
 pub async fn get_ticket_by_id(pool: &PgPool, ticket_id: Uuid) -> Result<Option<Ticket>> {
     let ticket = sqlx::query_as::<_, Ticket>(
-        "SELECT * FROM tickets WHERE id = $1"
+        "SELECT id, guild_id, channel_id, ticket_number, owner_id, category_id, claimed_by, assigned_to,
+                status, created_at, closed_at, priority, rating, last_activity, opening_message_id,
+                has_messages, last_message_at
+         FROM tickets WHERE id = $1"
     )
     .bind(ticket_id)
     .fetch_optional(pool)
@@ -205,7 +211,10 @@ pub async fn get_ticket_by_id(pool: &PgPool, ticket_id: Uuid) -> Result<Option<T
 
 pub async fn get_user_tickets(pool: &PgPool, guild_id: i64, user_id: i64) -> Result<Vec<Ticket>> {
     let tickets = sqlx::query_as::<_, Ticket>(
-        "SELECT * FROM tickets WHERE guild_id = $1 AND owner_id = $2 AND status = 'open' ORDER BY created_at DESC"
+        "SELECT id, guild_id, channel_id, ticket_number, owner_id, category_id, claimed_by, assigned_to,
+                status, created_at, closed_at, priority, rating, last_activity, opening_message_id,
+                has_messages, last_message_at
+         FROM tickets WHERE guild_id = $1 AND owner_id = $2 AND status = 'open' ORDER BY created_at DESC"
     )
     .bind(guild_id)
     .bind(user_id)
