@@ -16,6 +16,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    command: [
+      "postgres",
+      "-c", "log_statement=all",
+      "-c", "log_connections=on",
+      "-c", "log_disconnections=on"
+    ]
 
   redis:
     image: redis:7-alpine

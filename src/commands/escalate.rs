@@ -92,7 +92,7 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
 
         let embed = create_success_embed(
             "Ticket Escalated",
-            "Support team has been notified and will receive hourly reminders.",
+            "Support team has been notified and will receive hourly reminders."
         );
 
         interaction

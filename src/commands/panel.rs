@@ -59,7 +59,6 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction, db: &Database)
             }
         });
 
-    let channel = interaction.channel_id;
     let guild_id = interaction.guild_id.unwrap().get() as i64;
 
     let is_premium = crate::database::ticket::is_premium(&db.pool, guild_id).await?;
@@ -351,7 +350,6 @@ async fn create_panel(
     default_color: String,
     custom_colors: Option<HashMap<usize, String>>,
 ) -> Result<()> {
-    let channel = interaction.channel_id;
     let guild_id = interaction.guild_id.unwrap().get() as i64;
 
     let categories: Vec<(String, String, Option<String>)> = sqlx::query_as(
@@ -414,6 +412,7 @@ async fn create_panel(
 
     let components = vec![CreateActionRow::Buttons(buttons)];
 
+    let channel = interaction.channel_id;
     let msg = channel
         .send_message(&ctx.http, CreateMessage::new().embed(embed).components(components))
         .await?;
